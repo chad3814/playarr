@@ -1,0 +1,5 @@
+{
+  "categories": { "correctness": "error", "suspicious": "warn", "pedantic": "warn" },
+  "rules": { "typescript/no-explicit-any": "error" },
+  "ignorePatterns": ["dist", "node_modules", "packages/client/dist"]
+}

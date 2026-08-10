@@ -286,19 +286,19 @@ backpressure propagates back to the disk reads.
 
 ## API
 
-| Method      | Path                       | Notes                                                                    |
-| ----------- | -------------------------- | ------------------------------------------------------------------------ |
-| `POST`      | `/api/jobs`                | multipart `.nzb`. Parses, stores, returns candidates. No network.        |
-| `GET`       | `/api/jobs`                | Job list                                                                 |
-| `GET`       | `/api/jobs/:id`            | Job detail                                                               |
-| `POST`      | `/api/jobs/:id/select`     | `{ fileIndex }` → probe, truncate, fetch first and last. Becomes active. |
-| `GET`       | `/api/jobs/:id/stream`     | The Range endpoint                                                       |
-| `GET`       | `/api/jobs/:id/events`     | SSE: `{ status, covered, size, bytesPerSecond, dead }`                   |
-| `POST`      | `/api/jobs/:id/complete`   | Fill every fetchable hole from the lowest index up                       |
-| `GET`       | `/api/jobs/:id/download`   | `409 { missing }` unless `complete`, else an attachment                  |
-| `DELETE`    | `/api/jobs/:id`            | Stop the fetcher, remove the directory                                   |
-| `GET`/`PUT` | `/api/settings`            | GET returns `hasPassword: boolean`, never the value                      |
-| `POST`      | `/api/settings/test`       | Open one connection, authenticate, report                                |
+| Method      | Path                     | Notes                                                                    |
+| ----------- | ------------------------ | ------------------------------------------------------------------------ |
+| `POST`      | `/api/jobs`              | multipart `.nzb`. Parses, stores, returns candidates. No network.        |
+| `GET`       | `/api/jobs`              | Job list                                                                 |
+| `GET`       | `/api/jobs/:id`          | Job detail                                                               |
+| `POST`      | `/api/jobs/:id/select`   | `{ fileIndex }` → probe, truncate, fetch first and last. Becomes active. |
+| `GET`       | `/api/jobs/:id/stream`   | The Range endpoint                                                       |
+| `GET`       | `/api/jobs/:id/events`   | SSE: `{ status, covered, size, bytesPerSecond, dead }`                   |
+| `POST`      | `/api/jobs/:id/complete` | Fill every fetchable hole from the lowest index up                       |
+| `GET`       | `/api/jobs/:id/download` | `409 { missing }` unless `complete`, else an attachment                  |
+| `DELETE`    | `/api/jobs/:id`          | Stop the fetcher, remove the directory                                   |
+| `GET`/`PUT` | `/api/settings`          | GET returns `hasPassword: boolean`, never the value                      |
+| `POST`      | `/api/settings/test`     | Open one connection, authenticate, report                                |
 
 `bytesPerSecond` on the SSE stream is an exponential moving average over
 completed segments.
@@ -353,17 +353,17 @@ progress first if anything is missing.
 
 ## Failure handling
 
-| Failure                            | Behaviour                                                                                                                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `geometry.uniform === false`       | Job → `failed` at select. Variable article sizes mean byte offsets cannot be computed; `resolveRange` refuses outright, and guessing would serve bytes from the wrong place silently. |
-| `430` — article gone               | Segment → `dead`, fetcher continues at the next one. Reader serves zeros. UI marks the region. Never stalls.                                                                         |
-| CRC mismatch under `verify: true`  | Retry the article once, then treat as `dead`.                                                                                                                                        |
-| `NntpCredentialError`, auth failure | Surfaced on settings-test and on select. The job stays `ready` — a wrong password is not a broken job.                                                                               |
-| `NntpCapacityError`                | The pool shrinks its own limit. Surface `pool.failures` in settings so the real cap is visible rather than silent.                                                                   |
-| `ENOSPC`                           | Pause the fetcher, job → `failed` with a plain message. Do not retry into a full disk.                                                                                               |
-| Malformed NZB                      | `400` carrying the parser's own message unmodified. It is strict by design and its errors are specific.                                                                              |
-| Unconfigured provider              | `412` on select; the client opens settings.                                                                                                                                          |
-| Corrupt or missing `state.json`    | Job → `failed` at boot. The sparse file alone cannot say what is real.                                                                                                               |
+| Failure                             | Behaviour                                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `geometry.uniform === false`        | Job → `failed` at select. Variable article sizes mean byte offsets cannot be computed; `resolveRange` refuses outright, and guessing would serve bytes from the wrong place silently. |
+| `430` — article gone                | Segment → `dead`, fetcher continues at the next one. Reader serves zeros. UI marks the region. Never stalls.                                                                          |
+| CRC mismatch under `verify: true`   | Retry the article once, then treat as `dead`.                                                                                                                                         |
+| `NntpCredentialError`, auth failure | Surfaced on settings-test and on select. The job stays `ready` — a wrong password is not a broken job.                                                                                |
+| `NntpCapacityError`                 | The pool shrinks its own limit. Surface `pool.failures` in settings so the real cap is visible rather than silent.                                                                    |
+| `ENOSPC`                            | Pause the fetcher, job → `failed` with a plain message. Do not retry into a full disk.                                                                                                |
+| Malformed NZB                       | `400` carrying the parser's own message unmodified. It is strict by design and its errors are specific.                                                                               |
+| Unconfigured provider               | `412` on select; the client opens settings.                                                                                                                                           |
+| Corrupt or missing `state.json`     | Job → `failed` at boot. The sparse file alone cannot say what is real.                                                                                                                |
 
 ## Testing
 
