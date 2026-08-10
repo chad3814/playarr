@@ -116,7 +116,8 @@ interface JobState {
     fileIndex: number; // index into nzb.files
     name: string; // resolved output filename
     size: number; // authoritative, from =ybegin
-    geometry: { segmentSize: number; segmentCount: number; tailSize: number };
+    // field names mirror SegmentGeometry from @chad3814/nzb exactly
+    geometry: { segmentSize: number; lastSegmentSize: number; segmentCount: number };
     covered: [number, number][]; // half-open segment-index runs
     dead: number[]; // segments the provider no longer has
   };
