@@ -1,5 +1,11 @@
 {
   "categories": { "correctness": "error", "suspicious": "warn", "pedantic": "warn" },
   "rules": { "typescript/no-explicit-any": "error" },
-  "ignorePatterns": ["dist", "node_modules", "packages/client/dist"]
+  "ignorePatterns": ["dist", "node_modules", "packages/client/dist"],
+  "overrides": [
+    {
+      "files": ["packages/server/src/jobs/state.ts"],
+      "rules": { "eslint/max-classes-per-file": "off" }
+    }
+  ]
 }
