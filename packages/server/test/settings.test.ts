@@ -1,7 +1,8 @@
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ProviderError } from '@chad3814/secret-provider';
 import type { NntpSecret } from '@chad3814/nntp';
 import { ConfigStore } from '../src/config/store.ts';
 import {
@@ -34,6 +35,17 @@ function resolve(secret: NntpSecret): Promise<string> {
   return secret();
 }
 
+/**
+ * Secret-mount paths inside a fresh temp directory, standing in for
+ * `/run/secret/nntp_*` — neither file exists yet, so a test that never
+ * writes one exercises the "mount absent" branch without touching the real
+ * filesystem outside a temp directory.
+ */
+async function tempSecretPaths(): Promise<{ user: string; pass: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'playarr-secret-'));
+  return { user: join(dir, 'nntp_username'), pass: join(dir, 'nntp_password') };
+}
+
 describe('ConfigStore', () => {
   it('returns null before anything has been saved', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'playarr-config-'));
@@ -56,7 +68,6 @@ describe('ConfigStore', () => {
     const path = join(dir, 'config.json');
     const store = new ConfigStore(path);
     await store.save(stored);
-    const { writeFile } = await import('node:fs/promises');
     await writeFile(path, 'not json', 'utf8');
     expect(await store.load()).toBeNull();
   });
@@ -103,10 +114,25 @@ describe('resolveSettings', () => {
       username: '',
     });
   });
+});
 
+describe('resolveSettings: malformed or blank environment values', () => {
   it('ignores an unusable NNTP_CONNECTIONS rather than passing NaN to the pool', () => {
     const resolved = resolveSettings(stored, { NNTP_CONNECTIONS: 'eight' });
     expect(resolved?.connections).toBe(8);
+  });
+
+  it('falls back to the stored host when NNTP_HOST is empty', () => {
+    // docker-compose's `${NNTP_HOST:-}` interpolation injects '' whenever the
+    // variable is unset on the docker host, so '' must not blank a working
+    // stored host.
+    const resolved = resolveSettings(stored, { NNTP_HOST: '' });
+    expect(resolved?.host).toBe('stored.example.com');
+  });
+
+  it('falls back to the stored username when NNTP_USERNAME is empty', () => {
+    const resolved = resolveSettings(stored, { NNTP_USERNAME: '' });
+    expect(resolved?.username).toBe('stored-user');
   });
 });
 
@@ -149,7 +175,8 @@ describe('credentialsFor', () => {
   });
 
   it('falls back to the stored password when nothing else answers', async () => {
-    const { pass } = credentialsFor(stored, {});
+    const secretPaths = await tempSecretPaths();
+    const { pass } = credentialsFor(stored, {}, secretPaths);
     await expect(resolve(pass)).resolves.toBe('stored-secret');
   });
 
@@ -158,12 +185,32 @@ describe('credentialsFor', () => {
     await expect(resolve(user)).resolves.toBe('env-user');
   });
 
-  it('rejects when no source can supply a password', async () => {
-    // Every source in the chain is absent, so ProviderError propagates
-    // untouched — its aggregated list names each source that was tried, which
-    // is what makes a misconfiguration diagnosable.
-    const { pass } = credentialsFor({ ...stored, password: undefined }, {});
-    await expect(resolve(pass)).rejects.toThrow();
+  it('reads a mounted secret file ahead of the stored password', async () => {
+    // The path a real Docker or Kubernetes secret mount actually takes.
+    const secretPaths = await tempSecretPaths();
+    await writeFile(secretPaths.pass, 'mounted-secret\n', 'utf8');
+    const { pass } = credentialsFor(stored, {}, secretPaths);
+    await expect(resolve(pass)).resolves.toBe('mounted-secret');
+  });
+
+  it('rejects when no source can supply a password, naming every source tried', async () => {
+    const secretPaths = await tempSecretPaths();
+    const { pass } = credentialsFor({ ...stored, password: undefined }, {}, secretPaths);
+
+    let caught: unknown;
+    try {
+      await resolve(pass);
+    } catch (error) {
+      caught = error;
+    }
+
+    // ProviderError propagates untouched — its aggregated list names each
+    // source that was tried, which is what makes a misconfiguration
+    // diagnosable. A generic wrapping `Error` would fail this assertion.
+    expect(caught).toBeInstanceOf(ProviderError);
+    const message = caught instanceof Error ? caught.message : '';
+    expect(message).toContain('NNTP_PASSWORD');
+    expect(message).toContain(secretPaths.pass);
   });
 });
 

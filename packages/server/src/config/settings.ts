@@ -42,12 +42,28 @@ function security(value: string | undefined, fallback: NntpSecurity): NntpSecuri
   return SECURITIES.find((candidate) => candidate === value) ?? fallback;
 }
 
+/**
+ * An unset variable and a set-but-blank one both mean "nothing here" for a
+ * plain string field.
+ *
+ * `docker-compose.yml` interpolation such as `NNTP_HOST: ${NNTP_HOST:-}`
+ * injects the empty string whenever the host variable is unset on the docker
+ * host, so treating `''` the same as "absent" is required for the stored
+ * config to survive a container restart rather than being silently blanked.
+ */
+function envString(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined;
+  }
+  return value;
+}
+
 /** Environment beats the volume. Null when no host is configured anywhere. */
 export function resolveSettings(
   stored: StoredConfig | null,
   env: NodeJS.ProcessEnv,
 ): ResolvedSettings | null {
-  const host = env['NNTP_HOST'] ?? stored?.host ?? '';
+  const host = envString(env['NNTP_HOST']) ?? stored?.host ?? '';
   if (host === '') {
     return null;
   }
@@ -59,7 +75,7 @@ export function resolveSettings(
       env['NNTP_CONNECTIONS'],
       stored?.connections ?? DEFAULT_CONNECTIONS,
     ),
-    username: env['NNTP_USERNAME'] ?? stored?.username ?? '',
+    username: envString(env['NNTP_USERNAME']) ?? stored?.username ?? '',
   };
 }
 
@@ -76,8 +92,11 @@ export function resolveSettings(
 function fromInjectedEnv(env: NodeJS.ProcessEnv, name: string): Provider<string> {
   return () => {
     const value = env[name];
-    if (value === undefined || value === '') {
+    if (value === undefined) {
       return Promise.reject(new ProviderError(`${name} not set in the environment`));
+    }
+    if (value === '') {
+      return Promise.reject(new ProviderError(`${name} is set but empty`));
     }
     return Promise.resolve(value);
   };
@@ -92,12 +111,15 @@ function fromInjectedEnv(env: NodeJS.ProcessEnv, name: string): Provider<string>
 export function credentialsFor(
   stored: StoredConfig | null,
   env: NodeJS.ProcessEnv,
+  secretPaths?: { readonly user: string; readonly pass: string },
 ): { user: NntpSecret; pass: NntpSecret } {
+  const userPath = secretPaths?.user ?? SECRET_USERNAME_PATH;
+  const passPath = secretPaths?.pass ?? SECRET_PASSWORD_PATH;
   const storedUser = stored?.username;
   const storedPass = stored?.password;
 
-  const userSources = [fromInjectedEnv(env, 'NNTP_USERNAME'), fromFile(SECRET_USERNAME_PATH)];
-  const passSources = [fromInjectedEnv(env, 'NNTP_PASSWORD'), fromFile(SECRET_PASSWORD_PATH)];
+  const userSources = [fromInjectedEnv(env, 'NNTP_USERNAME'), fromFile(userPath)];
+  const passSources = [fromInjectedEnv(env, 'NNTP_PASSWORD'), fromFile(passPath)];
   if (storedUser !== undefined && storedUser !== '') {
     userSources.push(fromStatic(storedUser));
   }
