@@ -163,8 +163,8 @@ export async function readJobState(dir: string): Promise<JobState> {
 export async function writeJobState(dir: string, state: JobState): Promise<void> {
   const target = join(dir, STATE_FILENAME);
   const temp = `${target}.tmp`;
-  await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   try {
+    await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
     await rename(temp, target);
   } catch (error) {
     await unlink(temp).catch(() => {});
@@ -172,35 +172,39 @@ export async function writeJobState(dir: string, state: JobState): Promise<void>
   }
 }
 
+function asError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error(String(reason));
+}
+
 /**
  * Coalesces coverage updates, which otherwise land once per fetched article.
  *
  * The debounce exists only to avoid a write per 4 MiB. It must never be the
  * reason a status change is lost, so callers flush on every transition and on
- * shutdown.
+ * shutdown. A write that fails on its own (the timer-driven path, not an
+ * explicit `flush()`) is retried rather than dropped: the failed state is put
+ * back and the debounce is re-armed, unless a newer state was scheduled in
+ * the meantime, in which case the newer one supersedes it. `onError` lets the
+ * owner learn of the failure (to mark the job failed, for instance) without
+ * that path ever surfacing as an unhandled rejection.
  */
 export class JobStateWriter {
   readonly #dir: string;
   readonly #intervalMs: number;
+  readonly #onError: (error: Error) => void;
   #pending: JobState | null = null;
   #timer: NodeJS.Timeout | null = null;
   #inFlight: Promise<void> = Promise.resolve();
 
-  constructor(dir: string, intervalMs = 1_000) {
+  constructor(dir: string, intervalMs = 1_000, onError: (error: Error) => void = () => {}) {
     this.#dir = dir;
     this.#intervalMs = intervalMs;
+    this.#onError = onError;
   }
 
   schedule(state: JobState): void {
     this.#pending = state;
-    if (this.#timer !== null) {
-      return;
-    }
-    this.#timer = setTimeout(() => {
-      this.#timer = null;
-      void this.flush();
-    }, this.#intervalMs);
-    this.#timer.unref?.();
+    this.#arm();
   }
 
   flush(): Promise<void> {
@@ -213,11 +217,49 @@ export class JobStateWriter {
     if (state === null) {
       return this.#inFlight;
     }
-    this.#inFlight = this.#inFlight.then(() => writeJobState(this.#dir, state));
+    // Swallow whatever the previous attempt left behind so one failure
+    // cannot permanently jam every write after it.
+    this.#inFlight = this.#inFlight.catch(() => {}).then(() => writeJobState(this.#dir, state));
     return this.#inFlight;
   }
 
   async dispose(): Promise<void> {
     await this.flush();
+  }
+
+  #arm(): void {
+    if (this.#timer !== null) {
+      return;
+    }
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      this.#flushFromTimer();
+    }, this.#intervalMs);
+    this.#timer.unref?.();
+  }
+
+  /**
+   * The timer-driven counterpart to `flush()`. Unlike `flush()`, a failure
+   * here must never reject anywhere — there is no caller awaiting it — so it
+   * is caught, retried, and reported through `onError` instead.
+   */
+  #flushFromTimer(): void {
+    const state = this.#pending;
+    this.#pending = null;
+    if (state === null) {
+      return;
+    }
+    this.#inFlight = this.#inFlight
+      .catch(() => {})
+      .then(() => writeJobState(this.#dir, state))
+      .catch((reason: unknown) => {
+        // Only resurrect the failed state if nothing fresher arrived while
+        // this write was in flight; a newer schedule() always wins.
+        if (this.#pending === null) {
+          this.#pending = state;
+        }
+        this.#arm();
+        this.#onError(asError(reason));
+      });
   }
 }

@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   JobStateError,
   JobStateWriter,
@@ -10,6 +10,15 @@ import {
   writeJobState,
   type JobState,
 } from '../src/jobs/state.ts';
+
+// Mocked so failure-path tests can inject a rejection into a specific write,
+// and so the coalescing test can assert exactly one write call rather than
+// only inspecting the resulting bytes (three sequential writes converging on
+// the same final content would look identical to one write otherwise).
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
 
 const sample: JobState = {
   id: 'j1',
@@ -29,6 +38,12 @@ const sample: JobState = {
 function scratch(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'playarr-state-'));
 }
+
+function noop(): void {}
+
+beforeEach(() => {
+  vi.mocked(writeFile).mockClear();
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -110,7 +125,7 @@ describe('readJobState', () => {
 });
 
 describe('JobStateWriter - coalescing', () => {
-  it('coalesces rapid updates into one write', async () => {
+  it('coalesces rapid updates into exactly one write', async () => {
     vi.useFakeTimers();
     const dir = await scratch();
     const writer = new JobStateWriter(dir, 1_000);
@@ -125,6 +140,8 @@ describe('JobStateWriter - coalescing', () => {
     // Flushing again awaits the writer's own in-flight promise for real,
     // rather than relying on the fake clock's tick granularity.
     await writer.flush();
+
+    expect(vi.mocked(writeFile).mock.calls.length).toBe(1);
     const written = parseJobState(await readFile(join(dir, 'state.json'), 'utf8'));
     expect(written.selection?.covered).toEqual([[0, 3]]);
     await writer.dispose();
@@ -151,5 +168,96 @@ describe('JobStateWriter - flush and dispose', () => {
     writer.schedule({ ...sample, status: 'paused' });
     await writer.dispose();
     expect((await readJobState(dir)).status).toBe('paused');
+  });
+});
+
+describe('JobStateWriter - explicit flush surfaces its own failure', () => {
+  it('rejects to an explicitly awaited flush() rather than retrying silently', async () => {
+    const dir = await scratch();
+    const writer = new JobStateWriter(dir, 60_000);
+    vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('EACCES')));
+
+    writer.schedule({ ...sample, status: 'complete' });
+    await expect(writer.flush()).rejects.toThrow('EACCES');
+
+    // The writer must still be usable afterward: the failed explicit flush
+    // must not permanently jam the internal write chain.
+    writer.schedule({ ...sample, status: 'paused' });
+    await writer.flush();
+    expect((await readJobState(dir)).status).toBe('paused');
+    await writer.dispose();
+  });
+});
+
+describe('JobStateWriter - retries a failed timer-driven write', () => {
+  it('does not crash the process and retries until the write succeeds', async () => {
+    vi.useFakeTimers();
+    const dir = await scratch();
+    const onError = vi.fn();
+    const writer = new JobStateWriter(dir, 1_000, onError);
+    vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('ENOSPC')));
+
+    writer.schedule({ ...sample, status: 'paused' });
+    // The first attempt fails. If this rejection were left unhandled, the
+    // test run itself would fail via Vitest's unhandled-rejection detection.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+    // The debounce re-armed itself; the retry lands on its own.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await writer.flush();
+    expect((await readJobState(dir)).status).toBe('paused');
+    await writer.dispose();
+  });
+});
+
+describe('JobStateWriter - supersession of a failed retry', () => {
+  it('lets a state scheduled while the failed write was in flight supersede it', async () => {
+    vi.useFakeTimers();
+    const dir = await scratch();
+    const onError = vi.fn();
+    const writer = new JobStateWriter(dir, 1_000, onError);
+    let rejectWrite: (error: Error) => void = noop;
+    vi.mocked(writeFile).mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+
+    writer.schedule({ ...sample, status: 'paused' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The write above is still pending (its promise was never settled), so
+    // #pending is back to null. Schedule a newer state while it hangs.
+    writer.schedule({ ...sample, status: 'complete' });
+    rejectWrite(new Error('EACCES'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await writer.flush();
+    expect((await readJobState(dir)).status).toBe('complete');
+    expect(onError).toHaveBeenCalledTimes(1);
+    await writer.dispose();
+  });
+});
+
+describe('JobStateWriter - onError defaults', () => {
+  it('defaults to a no-op when no callback is supplied', async () => {
+    vi.useFakeTimers();
+    const dir = await scratch();
+    const writer = new JobStateWriter(dir, 1_000);
+    vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('boom')));
+
+    writer.schedule({ ...sample, status: 'paused' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await writer.flush();
+    expect((await readJobState(dir)).status).toBe('paused');
+    await writer.dispose();
   });
 });
