@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JobStore } from '../src/jobs/store.ts';
+import { JobStore, type JobRecord } from '../src/jobs/store.ts';
 import { writeJobState } from '../src/jobs/state.ts';
 
 // Mocked so the onWriteError test can inject a rejection into a specific
@@ -34,6 +34,26 @@ function fixedStore(root: string): JobStore {
     () => new Date('2026-08-10T00:00:00.000Z'),
     () => `job${(counter += 1)}`,
   );
+}
+
+/** Forces a record's in-memory state to carry the given (possibly unsafe) selection name. */
+function withSelection(store: JobStore, id: string, name: string): JobRecord {
+  const record = store.get(id);
+  if (record === undefined) {
+    throw new Error(`missing record: ${id}`);
+  }
+  record.state = {
+    ...record.state,
+    selection: {
+      fileIndex: 0,
+      name,
+      size: 2_000,
+      geometry: { segmentSize: 1_000, lastSegmentSize: 1_000, segmentCount: 2 },
+      covered: [],
+      dead: [],
+    },
+  };
+  return record;
 }
 
 afterEach(() => {
@@ -146,6 +166,43 @@ describe('JobStore.remove', () => {
 
     expect(store.get('job1')).toBeUndefined();
     await expect(stat(join(root, 'job1'))).rejects.toThrow();
+    await store.dispose();
+  });
+});
+
+describe('JobStore.outputPath - valid selection', () => {
+  it('returns the expected path for a normal name', async () => {
+    const root = await scratch();
+    const store = fixedStore(root);
+    await store.create('release.nzb', Buffer.from(NZB, 'utf8'));
+    const record = withSelection(store, 'job1', 'Some.Film.mp4');
+    expect(store.outputPath(record)).toBe(join(root, 'job1', 'Some.Film.mp4'));
+    await store.dispose();
+  });
+});
+
+describe('JobStore.outputPath - no selection', () => {
+  it('throws when there is no selected file', async () => {
+    const root = await scratch();
+    const store = fixedStore(root);
+    const record = await store.create('release.nzb', Buffer.from(NZB, 'utf8'));
+    expect(() => store.outputPath(record)).toThrow(/no selected file/u);
+    await store.dispose();
+  });
+});
+
+describe('JobStore.outputPath - unsafe selection names', () => {
+  it.each([
+    ['a forward slash', '../../etc/cron.d/x'],
+    ['a backslash', '..\\..\\windows\\x'],
+    ['..', '..'],
+    ['the empty string', ''],
+  ])('throws for a name containing %s', async (_label, name) => {
+    const root = await scratch();
+    const store = fixedStore(root);
+    await store.create('release.nzb', Buffer.from(NZB, 'utf8'));
+    const record = withSelection(store, 'job1', name);
+    expect(() => store.outputPath(record)).toThrow(/unsafe selection name/u);
     await store.dispose();
   });
 });

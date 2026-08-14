@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { parseNzb, type Nzb } from '@chad3814/nzb-parser';
 import {
   JobStateError,
@@ -55,10 +55,31 @@ export class JobStore {
     return this.#records.get(id);
   }
 
+  /**
+   * The single choke point every later task uses to open the video file.
+   *
+   * `selection.name` is only validated by `parseJobState` as a non-empty
+   * string, and `state.json` lives on the user's volume, so a hand-edited or
+   * corrupted file must not be able to steer a write outside the job
+   * directory. A name that isn't already its own basename is rejected
+   * outright rather than coerced: coercion would mean silently writing to a
+   * different path than the file that actually exists on disk.
+   */
   outputPath(record: JobRecord): string {
     const name = record.state.selection?.name;
     if (name === undefined) {
       throw new Error(`job ${record.state.id} has no selected file`);
+    }
+    if (
+      name === '' ||
+      name === '.' ||
+      name === '..' ||
+      name.includes('\\') ||
+      basename(name) !== name
+    ) {
+      throw new Error(
+        `job ${record.state.id} has an unsafe selection name: ${JSON.stringify(name)}`,
+      );
     }
     return join(record.dir, name);
   }
