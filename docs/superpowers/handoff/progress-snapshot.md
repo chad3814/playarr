@@ -1,7 +1,7 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-08-10-playarr-v1.md
 
 Branch: initial-design
-Worktree: /Users/cwalker/Projects/playarr/worktrees/initial-design
+Worktree: /Users/chad/Projects/playarr/worktrees/initial-design
 Tasks: 17
 
 Pre-flight: two plan defects found and fixed before Task 1 (commit pending):
@@ -170,7 +170,7 @@ unset-vs-empty message; commits fc4edc6..5107829)
 Task 5: complete (commits fc4edc6..5107829, review clean)
 
 Pre-flight for Task 6 (commit f12fb65). IMPORTANT LESSON — read
-node_modules, NOT /Users/cwalker/Projects/nzb-utils, when checking @chad3814
+node_modules, NOT /Users/chad/Projects/nzb-utils, when checking @chad3814
 APIs. The local nzb-utils worktree is AHEAD of the published 1.1.0 this project
 installs: it has already renamed NntpConnectionFailure.at -> .attempt for a
 future 2.0.0. A brief written from the local source would not compile.

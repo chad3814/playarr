@@ -124,7 +124,7 @@ across 5 consecutive full-suite runs and 5 consecutive isolated runs of
 ### `npx vitest run packages/server/test/state.test.ts` (final, after fixes)
 
 ```
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
 
  Test Files  1 passed (1)
@@ -160,7 +160,7 @@ All matched files use Prettier code style!
 > vitest run
 
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
 
  Test Files  3 passed (3)
@@ -413,7 +413,7 @@ addition from fix round 0 was left untouched.
 original + 4 new for Finding 1):
 
 ```
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
 
  Test Files  1 passed (1)
@@ -464,7 +464,7 @@ All matched files use Prettier code style!
 > vitest run
 
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
 
  Test Files  3 passed (3)

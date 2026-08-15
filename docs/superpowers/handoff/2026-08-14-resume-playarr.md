@@ -138,7 +138,7 @@ every remaining task.
 ## Hard-won lessons — do not relearn these
 
 1. **Verify library APIs against `node_modules`, never against
-   `/Users/cwalker/Projects/nzb-utils`.** That local worktree is *ahead* of the
+   `/Users/chad/Projects/nzb-utils`.** That local worktree is *ahead* of the
    published 1.1.0 this project installs — it has already renamed
    `NntpConnectionFailure.at` → `.attempt` for a future 2.0.0. A brief written
    from the local source will not compile. (On the new machine `nzb-utils` may

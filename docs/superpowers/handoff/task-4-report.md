@@ -110,7 +110,7 @@ ERROR (expected): NzbParseError <file> is missing the "poster" attribute (at off
 
 ```
 $ npx vitest run packages/server/test/store.test.ts
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  1 passed (1)
       Tests  8 passed (8)
@@ -151,7 +151,7 @@ All matched files use Prettier code style!
 > playarr@0.0.0 test
 > vitest run
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  4 passed (4)
       Tests  44 passed (44)
@@ -261,7 +261,7 @@ minors, not this task's problem): the synthetic corrupt-state record's
 ```
 $ npx vitest run packages/server/test/store.test.ts
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  1 passed (1)
       Tests  14 passed (14)
@@ -286,7 +286,7 @@ All matched files use Prettier code style!
 > playarr@0.0.0 test
 > vitest run
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  4 passed (4)
       Tests  50 passed (50)

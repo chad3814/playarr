@@ -63,7 +63,7 @@ npx vitest run packages/server/test/coverage.test.ts
 ```
 Output:
 ```
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  1 passed (1)
       Tests  13 passed (13)
@@ -95,7 +95,7 @@ All matched files use Prettier code style!
 > playarr@0.0.0 test
 > vitest run
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  2 passed (2)
       Tests  20 passed (20)
@@ -196,10 +196,10 @@ find packages/server/dist -type f
 ```
 Output:
 ```
-/Users/cwalker/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.js
-/Users/cwalker/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.d.ts
-/Users/cwalker/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.d.ts.map
-/Users/cwalker/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.js.map
+/Users/chad/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.js
+/Users/chad/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.d.ts
+/Users/chad/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.d.ts.map
+/Users/chad/Projects/playarr/worktrees/initial-design/packages/server/dist/coverage/coverage.js.map
 ```
 
 ✅ Clean: No test files, correct shallow path `dist/coverage/…`
@@ -241,7 +241,7 @@ All matched files use Prettier code style!
 > playarr@0.0.0 test
 > vitest run
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  2 passed (2)
       Tests  20 passed (20)

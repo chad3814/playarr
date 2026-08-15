@@ -315,7 +315,7 @@ All matched files use Prettier code style!
 > playarr@0.0.0 test
 > vitest run
 
- RUN  v4.1.10 /Users/cwalker/Projects/playarr/worktrees/initial-design
+ RUN  v4.1.10 /Users/chad/Projects/playarr/worktrees/initial-design
 
  Test Files  1 passed (1)
       Tests  7 passed (7)
