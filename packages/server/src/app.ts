@@ -10,6 +10,7 @@ import type { JobRecord, JobStore } from './jobs/store.ts';
 import type { PoolManager } from './nntp/pool.ts';
 import { registerJobRoutes } from './routes/jobs.ts';
 import { registerSelectRoutes } from './routes/select.ts';
+import { registerStreamRoutes } from './routes/stream.ts';
 
 export interface AppDeps {
   readonly store: JobStore;
@@ -75,6 +76,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // nor a schema rejection is a server-side fault, and Node's fs errors embed
   // absolute paths, so only a fixed string goes back.
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof Error && error.name === 'AbortError') {
+      // The socket is already gone.
+      return reply;
+    }
     if (error instanceof HttpError) {
       return reply.code(error.statusCode).send({ code: error.code, message: error.message });
     }
@@ -87,6 +92,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(registerJobRoutes, { deps, prefix: '/api' });
   await app.register(registerSelectRoutes, { deps, prefix: '/api' });
+  await app.register(registerStreamRoutes, { deps, prefix: '/api' });
 
   if (deps.clientDir !== undefined) {
     await app.register(fastifyStatic, { root: deps.clientDir });

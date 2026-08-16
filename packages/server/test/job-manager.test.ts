@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JobDto } from '@playarr/shared';
-import { closeFixture, fixture, selectRequest, SEG, type Fixture } from './select-harness.ts';
+import { closeFixture, fixture, selectRequest, SEG, type Fixture } from './app-fixture.ts';
 
-afterEach(closeFixture);
+let current: Fixture | null = null;
+
+afterEach(async () => {
+  await closeFixture(current);
+  current = null;
+});
 
 /** Put a job in exactly the state `markJobFailed` leaves behind. */
 async function failJob(f: Fixture): Promise<void> {
@@ -20,7 +25,8 @@ async function failJob(f: Fixture): Promise<void> {
 
 describe('JobManager.activate', () => {
   it('resumes a released job from its persisted coverage', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
     await f.manager.releaseAll();
     expect(f.manager.activeId).toBeNull();
@@ -35,7 +41,8 @@ describe('JobManager.activate', () => {
   });
 
   it('returns the running download rather than reopening it', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
     const running = f.manager.active();
     expect(await f.manager.activate(f.jobId)).toBe(running);
@@ -44,7 +51,8 @@ describe('JobManager.activate', () => {
 
 describe('JobManager.activate - rejected requests', () => {
   it('409s a job that has no selection yet', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await expect(f.manager.activate(f.jobId)).rejects.toMatchObject({
       statusCode: 409,
       code: 'not-selected',
@@ -52,12 +60,14 @@ describe('JobManager.activate - rejected requests', () => {
   });
 
   it('404s a job that does not exist', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await expect(f.manager.activate('nope')).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('412s once the provider has gone away', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
     await f.manager.releaseAll();
     await f.pool.destroy();
@@ -71,7 +81,8 @@ describe('JobManager.activate - rejected requests', () => {
 
 describe('JobManager.activeRecord', () => {
   it('is null until a job is selected, and the record afterwards', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     expect(f.manager.activeRecord()).toBeNull();
 
     await f.app.inject(selectRequest(f.jobId, 0));
@@ -84,7 +95,8 @@ describe('JobManager.activeRecord', () => {
 
 describe('JobManager single-flight ownership', () => {
   it('stops and closes the download a concurrent selection displaces', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     const probe = f.post.file.segments[0]!.messageId;
     const tail = f.post.file.segments[3]!.messageId;
     f.source.hold(probe);
@@ -131,7 +143,8 @@ describe('JobManager single-flight ownership', () => {
 
 describe('JobManager stale failures', () => {
   it('drops a previous attempt’s failure when a selection succeeds', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await failJob(f);
 
     const job = (await f.app.inject(selectRequest(f.jobId, 0))).json<JobDto>();
@@ -141,7 +154,8 @@ describe('JobManager stale failures', () => {
   });
 
   it('drops it when a resume succeeds', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
     await f.manager.releaseAll();
     await failJob(f);
@@ -154,7 +168,8 @@ describe('JobManager stale failures', () => {
 
 describe('JobManager background persistence failures', () => {
   it('reports a rejected coverage write instead of leaving it unhandled', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
 
     f.store.armed = true;
@@ -170,7 +185,8 @@ describe('JobManager background persistence failures', () => {
   });
 
   it('keeps fetching after a coverage write fails', async () => {
-    const f = await fixture();
+    current = await fixture();
+    const f = current;
     await f.app.inject(selectRequest(f.jobId, 0));
 
     f.store.armed = true;

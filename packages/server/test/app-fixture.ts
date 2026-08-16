@@ -47,6 +47,7 @@ export interface FixtureOptions {
   readonly name?: string;
   readonly subject?: string;
   readonly sizes?: readonly number[];
+  /** Defaults to true. False builds an app with no provider configured. */
   readonly configured?: boolean;
 }
 
@@ -103,8 +104,6 @@ function poolFor(source: GatedArticleSource, configured: boolean): PoolManager {
   return pool;
 }
 
-let current: Fixture | null = null;
-
 /** An app with one uploaded job, ready to be selected. Closed by `closeFixture`. */
 export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const post = buildPost({
@@ -112,7 +111,7 @@ export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     segmentSizes: options.sizes ?? [SEG, SEG, SEG, 400],
   });
 
-  const root = await mkdtemp(join(tmpdir(), 'playarr-select-'));
+  const root = await mkdtemp(join(tmpdir(), 'playarr-app-'));
   const store = new RefusingStore(join(root, 'jobs'));
   await store.scan();
   const source = new GatedArticleSource(post.source);
@@ -139,19 +138,19 @@ export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     })
   ).json<JobDto>();
 
-  current = { app, store, pool, manager, post, source, jobId: created.id, onError };
-  return current;
+  return { app, store, pool, manager, post, source, jobId: created.id, onError };
 }
 
-/** Tear down whatever `fixture` last built. Call from `afterEach`. */
-export async function closeFixture(): Promise<void> {
-  const open = current;
-  current = null;
-  if (open === null) {
+/** Tear down a fixture `fixture()` built. Call from `afterEach`. */
+export async function closeFixture(current: Fixture | null): Promise<void> {
+  if (current === null) {
     return;
   }
-  open.store.armed = false;
-  await open.manager.releaseAll();
-  await open.app.close();
-  await open.store.dispose();
+  // Disarmed before releasing: releaseAll persists a 'paused' transition, and
+  // a test that armed the store to prove a write failure must not fail its
+  // own teardown the same way.
+  current.store.armed = false;
+  await current.manager.releaseAll();
+  await current.store.dispose();
+  await current.app.close();
 }
