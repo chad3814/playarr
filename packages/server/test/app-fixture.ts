@@ -85,12 +85,28 @@ export function selectRequest(
   return { method: 'POST', url: `/api/jobs/${jobId}/select`, payload: { fileIndex } };
 }
 
-/** A pool that serves one synthetic post and never opens a socket. */
+/**
+ * The Message-ID `PoolManager.test()` probes with. Duplicated rather than
+ * imported: it is a private detail of `nntp/pool.ts`, and this fixture only
+ * needs to recognise it, not depend on it.
+ */
+const PROBE_MESSAGE_ID = 'playarr-connection-probe@invalid';
+
+/**
+ * A pool that serves one synthetic post and never opens a socket.
+ *
+ * The probe id is answered the way a real provider answers a connectivity
+ * check: authenticated, but the article itself does not exist. Every other
+ * id is served from the synthetic post.
+ */
 function poolFor(source: GatedArticleSource, configured: boolean): PoolManager {
   const pool = new PoolManager(
     () =>
       ({
-        body: (id: string) => source.body(id),
+        body: (id: string) =>
+          id === PROBE_MESSAGE_ID
+            ? Promise.reject(new Error('430 No such article'))
+            : source.body(id),
         destroy: () => {},
         failures: [],
       }) as PoolLike,

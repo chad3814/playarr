@@ -11,6 +11,7 @@ import type { PoolManager } from './nntp/pool.ts';
 import { registerDeliveryRoutes } from './routes/delivery.ts';
 import { registerJobRoutes } from './routes/jobs.ts';
 import { registerSelectRoutes } from './routes/select.ts';
+import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerStreamRoutes } from './routes/stream.ts';
 
 export interface AppDeps {
@@ -65,8 +66,32 @@ function isSchemaRejection(error: unknown): error is Error {
   return error instanceof Error && 'validation' in error && Array.isArray(error.validation);
 }
 
+/** Serve built client assets, if any, falling back to the SPA shell for client-side routes. */
+async function registerClientFallback(
+  app: FastifyInstance,
+  clientDir: string | undefined,
+): Promise<void> {
+  if (clientDir === undefined) {
+    return;
+  }
+  await app.register(fastifyStatic, { root: clientDir });
+  // Client-side routing: anything not under /api falls back to the shell.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.url.startsWith('/api')) {
+      void reply.code(404).send({ code: 'not-found', message: 'No such endpoint.' });
+      return;
+    }
+    void reply.sendFile('index.html');
+  });
+}
+
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
+  // `logger: false` resolves to abstract-logging's no-op, so every app.log
+  // call below (and every route's) would otherwise vanish silently. A real
+  // pino instance is what makes the 500 branch's app.log.error actually
+  // record something. Fastify's own request/response lines go through it too,
+  // never a credential: nothing here logs a request body.
+  const app = Fastify({ logger: true, bodyLimit: 1_048_576 });
 
   // NZBs are XML and rarely large; 64 MiB is generous and bounded.
   await app.register(multipart, { limits: { fileSize: 64 * 1_048_576, files: 1 } });
@@ -95,18 +120,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(registerSelectRoutes, { deps, prefix: '/api' });
   await app.register(registerStreamRoutes, { deps, prefix: '/api' });
   await app.register(registerDeliveryRoutes, { deps, prefix: '/api' });
+  await app.register(registerSettingsRoutes, { deps, prefix: '/api' });
 
-  if (deps.clientDir !== undefined) {
-    await app.register(fastifyStatic, { root: deps.clientDir });
-    // Client-side routing: anything not under /api falls back to the shell.
-    app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/api')) {
-        void reply.code(404).send({ code: 'not-found', message: 'No such endpoint.' });
-        return;
-      }
-      void reply.sendFile('index.html');
-    });
-  }
+  await registerClientFallback(app, deps.clientDir);
 
   return app;
 }
