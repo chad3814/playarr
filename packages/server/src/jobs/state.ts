@@ -183,16 +183,23 @@ function asError(reason: unknown): Error {
  * reason a status change is lost, so callers flush on every transition and on
  * shutdown. A write that fails on its own (the timer-driven path, not an
  * explicit `flush()`) is retried rather than dropped: the failed state is put
- * back and the debounce is re-armed, unless a newer state was scheduled in
- * the meantime, in which case the newer one supersedes it. `onError` lets the
- * owner learn of the failure (to mark the job failed, for instance) without
- * that path ever surfacing as an unhandled rejection.
+ * back and the debounce is re-armed, unless something newer appeared while it
+ * was in flight — scheduled by the owner, or taken by a `flush()` — in which
+ * case the newer wins and the failed state is dropped rather than written over
+ * its own successor. `onError` lets the owner learn of the failure (to mark
+ * the job failed, for instance) without ever surfacing an unhandled rejection.
  */
 export class JobStateWriter {
   readonly #dir: string;
   readonly #intervalMs: number;
   readonly #onError: (error: Error) => void;
   #pending: JobState | null = null;
+  /**
+   * Counts states taken for writing, so a failing write can tell "nothing has
+   * happened since" from "something newer was already taken". `#pending` alone
+   * reads as null in both cases.
+   */
+  #taken = 0;
   #timer: NodeJS.Timeout | null = null;
   #inFlight: Promise<void> = Promise.resolve();
 
@@ -210,15 +217,19 @@ export class JobStateWriter {
   /**
    * Two passes, because a timer-driven write that is failing has already taken
    * its state out of `#pending` and does not hand it back until its own catch
-   * handler runs. That handler is the tail of `#inFlight`, so it is still
-   * queued behind the promise the first pass awaits: during that window
-   * `#pending` reads as null and the first pass writes nothing. Returning
-   * there would let `dispose()` report a clean shutdown while the state is
-   * only in memory, owned by an unref'd retry timer that exit will never run.
+   * handler runs — and that handler is the tail of `#inFlight`, still queued
+   * behind the promise the first pass awaits. In that window `#pending` reads
+   * as null, so the first pass writes nothing, and returning there would let
+   * `dispose()` report a clean shutdown while the state was only in memory,
+   * owned by an unref'd retry timer that exit will never run.
    *
-   * One re-check is enough. Awaiting `#inFlight` drains every handler that can
-   * restore `#pending`, and `#flushOnce` clears the debounce synchronously
-   * before it awaits, so no further timer-driven write can start underneath.
+   * One re-check covers the writer's own retry: awaiting `#inFlight` drains
+   * every handler that could restore `#pending`, and a handler restores only
+   * when its write was the most recent take, so the second pass has at most
+   * one state to write. A `schedule()` from outside during the flush is
+   * deliberately not covered — the debounce may take it and write it after
+   * this returns. `flush()` promises to land everything scheduled before it
+   * was called, not everything scheduled while it runs.
    */
   async flush(): Promise<void> {
     await this.#flushOnce();
@@ -241,6 +252,7 @@ export class JobStateWriter {
     if (state === null) {
       return this.#inFlight;
     }
+    this.#taken += 1;
     // Swallow whatever the previous attempt left behind so one failure
     // cannot permanently jam every write after it.
     this.#inFlight = this.#inFlight.catch(() => {}).then(() => writeJobState(this.#dir, state));
@@ -269,16 +281,19 @@ export class JobStateWriter {
     if (state === null) {
       return;
     }
+    const taken = (this.#taken += 1);
     this.#inFlight = this.#inFlight
       .catch(() => {})
       .then(() => writeJobState(this.#dir, state))
       .catch((reason: unknown) => {
-        // Only resurrect the failed state if nothing fresher arrived while
-        // this write was in flight; a newer schedule() always wins.
-        if (this.#pending === null) {
+        // Put the failed state back only if nothing newer appeared by either
+        // route: a `schedule()` leaves the newer state in `#pending`, while a
+        // `flush()` that took one left `#pending` null but moved `#taken` on.
+        // Restoring past a newer take would write this state over its successor.
+        if (this.#pending === null && this.#taken === taken) {
           this.#pending = state;
+          this.#arm();
         }
-        this.#arm();
         this.#onError(asError(reason));
       });
   }

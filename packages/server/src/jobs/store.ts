@@ -135,9 +135,11 @@ export class JobStore {
     // at here is writing state.json into the directory the next line deletes,
     // so the failure is moot; letting it propagate would strand a directory
     // whose record is already gone, and nothing would ever come back for it.
-    // A rejected dispose still leaves the writer quiescent — it takes the
-    // state out of `#pending` and clears the timer before the write it fails
-    // on — so nothing keeps retrying against the deleted directory.
+    // A rejected dispose still leaves the writer quiescent, so nothing keeps
+    // retrying against the deleted directory: the only handler that re-arms
+    // the debounce is the timer path's, and it re-arms only when its own write
+    // was the writer's most recent take — which a flush that took a newer
+    // state, as this one does, is not.
     await record.writer.dispose().catch(() => {});
     await rm(record.dir, { recursive: true, force: true });
   }
