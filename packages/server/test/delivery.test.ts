@@ -87,6 +87,21 @@ describe('POST /api/jobs/:id/complete', () => {
   });
 });
 
+describe('POST /api/jobs/:id/complete - a fill that fails', () => {
+  it('leaves the job out of `completing` rather than stuck in it', async () => {
+    const f = await selected();
+    vi.spyOn(f.manager.active()!, 'completeAll').mockRejectedValue(new Error('provider vanished'));
+
+    const response = await f.app.inject({ method: 'POST', url: `/api/jobs/${f.jobId}/complete` });
+
+    expect(response.statusCode).toBe(500);
+    // 'completing' has no affordance behind it -- the finished dialog offers
+    // Download and Delete, and neither gets a job out of it -- so a job left
+    // there is stuck until the container restarts.
+    expect(f.store.get(f.jobId)?.state.status).toBe('paused');
+  });
+});
+
 describe('GET /api/jobs/:id/events', () => {
   it('emits an SSE progress frame immediately', async () => {
     const f = await selected();

@@ -35,7 +35,11 @@ const NZB = `<?xml version="1.0" encoding="iso-8859-1" ?>
 
 let app: FastifyInstance | null = null;
 
-async function makeAppWithStore(root: string, store: JobStore): Promise<FastifyInstance> {
+async function makeAppWithStore(
+  root: string,
+  store: JobStore,
+  logger = testLogger().logger,
+): Promise<FastifyInstance> {
   await store.scan();
   const pool = new PoolManager(() => {
     throw new Error('no pool in this test');
@@ -46,7 +50,7 @@ async function makeAppWithStore(root: string, store: JobStore): Promise<FastifyI
     config: new ConfigStore(join(root, 'config.json')),
     pool,
     env: {},
-    logger: testLogger().logger,
+    logger,
   });
   app = built;
   return built;
@@ -131,6 +135,19 @@ describe('POST /api/jobs when the store fails to persist', () => {
     expect(response.json<{ code: string }>().code).not.toBe('bad-nzb');
     expect(response.body).not.toContain('/data/jobs');
     expect(response.body).not.toContain('EACCES');
+  });
+
+  it('logs it, so a full or read-only /data is not invisible to the operator', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'playarr-routes-'));
+    const { logger, lines } = testLogger('error');
+    const server = await makeAppWithStore(root, new FailingStore(join(root, 'jobs')), logger);
+    await server.inject({ method: 'POST', url: '/api/jobs', ...multipart(NZB, 'release.nzb') });
+
+    const logged = lines.filter((line) => line['level'] === 50);
+    expect(logged).toHaveLength(1);
+    // The detail the response body deliberately withholds has to land here
+    // instead, or nothing anywhere records why the upload failed.
+    expect(JSON.stringify(logged[0])).toContain('EACCES');
   });
 });
 

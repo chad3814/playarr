@@ -35,17 +35,22 @@ export interface ShutdownDeps {
  * process. Blocking any longer here cannot recover a write that has already
  * failed, so the rest of shutdown still runs.
  *
- * Only `dispose()` is guarded this way. `releaseAll()`, `destroy()`, and
- * `close()` below have no equivalent handling: a rejection from any of them
- * still reaches the bare `.then()` around this call in index.ts as an
- * unhandled rejection. That asymmetry is current, not an oversight left for
- * later — `dispose()` is guarded because it is the one call whose failure
- * mode (a job's final state silently not reaching disk) this task was asked
- * to make a deliberate decision about; the other three have no such decision
- * recorded yet.
+ * `releaseAll()` is guarded the same way, and for the sake of the line below
+ * it rather than for its own: it persists a 'paused' transition through
+ * `store.update(..., { flush: true })`, so a volume that has stopped
+ * accepting writes fails it — and an unguarded rejection there would skip
+ * `dispose()` entirely, losing the final state of every *other* job as well
+ * as its own. The whole point of `dispose()` is that one unwritable job does
+ * not cost the rest their state, and that has to hold from here too.
+ *
+ * `destroy()` and `close()` are left bare: they hold nothing durable, and
+ * index.ts catches whatever they throw.
  */
 export async function shutdown(deps: ShutdownDeps): Promise<void> {
-  await deps.manager.releaseAll();
+  await deps.manager.releaseAll().catch((reason: unknown) => {
+    deps.app.log.error({ err: asError(reason) }, 'the active job was not cleanly released');
+    process.exitCode = 1;
+  });
   await deps.store.dispose().catch((reason: unknown) => {
     deps.app.log.error({ err: asError(reason) }, 'job state was not fully flushed during shutdown');
     process.exitCode = 1;

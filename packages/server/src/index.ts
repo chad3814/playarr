@@ -5,7 +5,7 @@ import { buildApp } from './app.ts';
 import { ConfigStore } from './config/store.ts';
 import { readEnv } from './env.ts';
 import { JobManager } from './jobs/manager.ts';
-import { reportToLogger } from './jobs/reporting.ts';
+import { asError, reportToLogger } from './jobs/reporting.ts';
 import { JobStore } from './jobs/store.ts';
 import { PoolManager } from './nntp/pool.ts';
 import { applySettings } from './routes/settings.ts';
@@ -48,9 +48,18 @@ const app = await buildApp(deps);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    void shutdown({ manager, store, pool, app }).then(() => process.exit());
+    // Caught rather than left bare: an unhandled rejection here aborts the
+    // process on the spot, before `process.exit()` and before anything after
+    // the failing step has run. A shutdown that cannot finish still has to
+    // exit deliberately, and say so through the exit code.
+    void shutdown({ manager, store, pool, app })
+      .catch((reason: unknown) => {
+        logger.error({ err: asError(reason) }, 'shutdown did not complete');
+        process.exitCode = 1;
+      })
+      .then(() => process.exit());
   });
 }
 
 await app.listen({ port: env.port, host: env.host });
-console.log(`playarr listening on http://${env.host}:${env.port}`);
+logger.info({ port: env.port, host: env.host }, 'playarr listening');

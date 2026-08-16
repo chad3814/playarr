@@ -80,7 +80,18 @@ function status(value: unknown): JobStatus {
   return found;
 }
 
-function runs(value: unknown, field: string): SegmentRun[] {
+/**
+ * Coverage runs, checked against the geometry they claim to describe.
+ *
+ * A pair that ends before it starts, or that runs past the last segment,
+ * satisfies every field-level check above and is then rejected by
+ * `SegmentCoverage`'s constructor — as an uncaught `RangeError` inside
+ * `JobManager.#activate`, surfacing as a generic 500 on whatever request
+ * happened to touch the job. A state.json that cannot describe a real file is
+ * corrupt, and the spec says a corrupt state.json fails the job at boot, so it
+ * is caught here where `JobStore.#loadState` already knows what to do with it.
+ */
+function runs(value: unknown, field: string, segmentCount: number): SegmentRun[] {
   if (!Array.isArray(value)) {
     corrupt(`${field} must be an array`);
   }
@@ -88,7 +99,29 @@ function runs(value: unknown, field: string): SegmentRun[] {
     if (!Array.isArray(entry) || entry.length !== 2) {
       corrupt(`${field}[${index}] must be a [start, end) pair`);
     }
-    return [integer(entry[0], `${field}[${index}][0]`), integer(entry[1], `${field}[${index}][1]`)];
+    const start = integer(entry[0], `${field}[${index}][0]`);
+    const end = integer(entry[1], `${field}[${index}][1]`);
+    if (end < start) {
+      corrupt(`${field}[${index}] ends before it starts: [${start}, ${end})`);
+    }
+    if (end > segmentCount) {
+      corrupt(`${field}[${index}] runs past segment ${segmentCount}: [${start}, ${end})`);
+    }
+    return [start, end];
+  });
+}
+
+/** Dead segment indices, bounded by the same geometry as `covered`. */
+function deadSegments(value: unknown, segmentCount: number): number[] {
+  if (!Array.isArray(value)) {
+    corrupt('selection.dead must be an array');
+  }
+  return value.map((entry, index) => {
+    const segment = integer(entry, `selection.dead[${index}]`);
+    if (segment >= segmentCount) {
+      corrupt(`selection.dead[${index}] is not a segment of this file: ${segment}`);
+    }
+    return segment;
   });
 }
 
@@ -103,15 +136,14 @@ function geometry(value: unknown): JobGeometry {
 
 function selection(value: unknown): JobSelection {
   const raw = object(value, 'selection');
+  const shape = geometry(raw['geometry']);
   return {
     fileIndex: integer(raw['fileIndex'], 'selection.fileIndex'),
     name: string(raw['name'], 'selection.name'),
     size: integer(raw['size'], 'selection.size'),
-    geometry: geometry(raw['geometry']),
-    covered: runs(raw['covered'], 'selection.covered'),
-    dead: Array.isArray(raw['dead'])
-      ? raw['dead'].map((entry, index) => integer(entry, `selection.dead[${index}]`))
-      : corrupt('selection.dead must be an array'),
+    geometry: shape,
+    covered: runs(raw['covered'], 'selection.covered', shape.segmentCount),
+    dead: deadSegments(raw['dead'], shape.segmentCount),
   };
 }
 

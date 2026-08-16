@@ -49,6 +49,30 @@ describe('shutdown - the happy path', () => {
   });
 });
 
+describe('shutdown - a releaseAll() that rejects', () => {
+  it('still flushes every other job rather than losing the lot', async () => {
+    const { app, error, close } = fakeApp();
+    const { pool } = fakePool();
+    const { store } = fakeStore(() => Promise.resolve());
+    const manager = {
+      releaseAll: vi.fn<VoidResolver>(() =>
+        Promise.reject(new Error('ENOSPC: no space left on device')),
+      ),
+    };
+
+    await shutdown({ manager, store, pool, app });
+
+    // releaseAll persists a 'paused' transition, so an unwritable volume fails
+    // it -- and unguarded that skips dispose() entirely, costing every other
+    // job its final state for a reason that has nothing to do with them.
+    expect(store.dispose).toHaveBeenCalledTimes(1);
+    expect(pool.destroy).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+  });
+});
+
 describe('shutdown - a dispose() that rejects', () => {
   it('logs the loss, sets a non-zero exit code, and still finishes shutting down', async () => {
     const { app, error, close } = fakeApp();

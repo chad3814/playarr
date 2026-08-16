@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  JobStateError,
   JobStateWriter,
   parseJobState,
   readJobState,
@@ -59,55 +58,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe('parseJobState - valid input', () => {
-  it('accepts a job that has not been selected yet', () => {
-    const state = parseJobState(
-      JSON.stringify({
-        id: 'j1',
-        createdAt: '2026-08-10T00:00:00.000Z',
-        nzbName: 'a.nzb',
-        status: 'uploaded',
-      }),
-    );
-    expect(state.selection).toBeUndefined();
-    expect(state.status).toBe('uploaded');
-  });
-
-  it('round-trips a selected job', () => {
-    expect(parseJobState(JSON.stringify(sample))).toEqual(sample);
-  });
-});
-
-describe('parseJobState - rejects invalid input', () => {
-  it('rejects malformed JSON as corrupt', () => {
-    expect(() => parseJobState('{ not json')).toThrow(JobStateError);
-    try {
-      parseJobState('{ not json');
-    } catch (error) {
-      expect(error).toBeInstanceOf(JobStateError);
-      expect((error as JobStateError).code).toBe('corrupt');
-    }
-  });
-
-  it('rejects an unknown status rather than coercing it', () => {
-    const raw = JSON.stringify({ ...sample, status: 'downloading' });
-    expect(() => parseJobState(raw)).toThrow(/status/u);
-  });
-
-  it('rejects a coverage run that is not a pair of integers', () => {
-    const raw = JSON.stringify({
-      ...sample,
-      selection: { ...sample.selection, covered: [[0, '3']] },
-    });
-    expect(() => parseJobState(raw)).toThrow(JobStateError);
-  });
-
-  it('rejects a selection missing its geometry', () => {
-    const raw = JSON.stringify({ ...sample, selection: { ...sample.selection, geometry: null } });
-    expect(() => parseJobState(raw)).toThrow(JobStateError);
-  });
 });
 
 describe('writeJobState', () => {

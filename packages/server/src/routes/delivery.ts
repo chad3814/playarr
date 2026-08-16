@@ -5,10 +5,13 @@ import type { AppDeps } from '../app.ts';
 import { toJobDto } from '../app.ts';
 import { HttpError } from '../errors.ts';
 import type { JobManager } from '../jobs/manager.ts';
+import { asError } from '../jobs/reporting.ts';
 import type { JobSelection } from '../jobs/state.ts';
 import type { JobRecord, JobStore } from '../jobs/store.ts';
 
-const PROGRESS_INTERVAL_MS = 500;
+export const PROGRESS_INTERVAL_MS = 500;
+
+type CompleteRequest = FastifyRequest<{ Params: { id: string } }>;
 
 interface Selected {
   readonly record: JobRecord;
@@ -70,18 +73,53 @@ function sendProgress(store: JobStore, manager: JobManager, id: string, reply: F
  * 'complete' unconditionally (unless the download died) so the response is
  * never sent ahead of the state that backs it.
  */
-async function completeJob(store: JobStore, manager: JobManager, id: string): Promise<JobDto> {
+async function completeJob(
+  store: JobStore,
+  manager: JobManager,
+  request: CompleteRequest,
+): Promise<JobDto> {
+  const id = request.params.id;
   const { record } = selected(store, id);
   const download = await manager.activate(record.state.id);
 
   await store.update(record.state.id, { ...record.state, status: 'completing' }, { flush: true });
-  await download.completeAll();
+  try {
+    await download.completeAll();
+  } catch (error) {
+    await abandonCompletion(store, request);
+    throw error;
+  }
 
   const after = selected(store, record.state.id).record;
   if (after.state.status !== 'failed') {
     await store.update(after.state.id, { ...after.state, status: 'complete' }, { flush: true });
   }
   return toJobDto(selected(store, record.state.id).record, manager.activeId);
+}
+
+/**
+ * Put a job whose fill did not finish back into a status the UI can act on.
+ *
+ * 'completing' is a status with nothing behind it: the finished dialog's
+ * Download and Delete buttons are the only affordances, and neither offers a
+ * way back out of a fill that has already stopped. So a job left there is
+ * stuck until the container restarts. 'paused' is what the job actually is.
+ *
+ * A fatal download failure has already written 'failed', which is truer than
+ * anything here, so that is left alone. The restore's own failure is logged
+ * and swallowed: the caller is about to rethrow the reason the fill failed,
+ * and that is the more useful of the two.
+ */
+async function abandonCompletion(store: JobStore, request: CompleteRequest): Promise<void> {
+  const record = store.get(request.params.id);
+  if (record === undefined || record.state.status !== 'completing') {
+    return;
+  }
+  await store
+    .update(record.state.id, { ...record.state, status: 'paused' }, { flush: true })
+    .catch((reason: unknown) => {
+      request.log.error({ err: asError(reason) }, 'a job could not be moved out of completing');
+    });
 }
 
 /**
@@ -162,7 +200,7 @@ export const registerDeliveryRoutes: FastifyPluginAsync<{ deps: AppDeps }> = (
   const { store, manager } = options.deps;
 
   app.post<{ Params: { id: string } }>('/jobs/:id/complete', (request) =>
-    completeJob(store, manager, request.params.id),
+    completeJob(store, manager, request),
   );
 
   app.get<{ Params: { id: string } }>('/jobs/:id/download', (request, reply) =>
