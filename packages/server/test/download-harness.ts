@@ -16,6 +16,15 @@ export const SHORT_TAIL = [SEG, SEG, SEG, SEG, 400] as const;
 /** Long enough that a seek to 6 is well outside a prefetch window of 2. */
 export const EIGHT = [SEG, SEG, SEG, SEG, SEG, SEG, SEG, 400] as const;
 
+/**
+ * Long enough to hold an anchor for a whole dwell and still have file left.
+ *
+ * The dwell is a real constant rather than an injected one, so the only way to
+ * watch the fetcher rotate off an anchor is to give it more segments than the
+ * dwell allows it to spend on one.
+ */
+export const LONG = [...Array.from({ length: 39 }, () => SEG), 400] as const;
+
 export interface Harness {
   readonly download: Download;
   readonly post: Post;

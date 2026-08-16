@@ -147,10 +147,10 @@ export class Download {
    * precisely so that everything between them is left alone, and turn every
    * selection into an immediate download of the entire file.
    *
-   * What this does *not* cover: outside this method a reader parked on a
-   * segment whose demand was superseded by a later `want()` can still be left
-   * unwoken if the fetcher then exhausts. Serving it means knowing what is
-   * still parked, which is a demand policy rather than the absence of a bug.
+   * A reader that this fill leaves parked behind is not this method's problem
+   * any more: the fetcher reads its demand off the notifier, so the walk turns
+   * to whoever is still waiting before it considers the lowest hole. See
+   * `DemandPolicy`.
    */
   async completeAll(): Promise<void> {
     this.#fetcher.fillHoles(true);
