@@ -107,11 +107,83 @@ describe('Download demand between two persistent readers', () => {
     });
     await flush();
 
-    // 36 segments, one article for the geometry probe `openNzbFile` does, and
-    // five thrown away: two in flight at the anchor of 0 when the second
+    // 42 = 36 segments + 1 article for the geometry probe `openNzbFile` does
+    // + 5 thrown away. The 37 are structural and cannot move without the walk
+    // itself changing; the 5 are the arbitration, and are the number to look
+    // at if this ever drifts: two in flight at the anchor of 0 when the second
     // reader's demand superseded the first's, then a pair at each of the two
-    // turns. That is the whole cost of arbitrating between them. The same pair
-    // with a dwell of one costs 102 articles for the same 36 segments.
+    // turns. The same pair with a dwell of one costs 102 for the same 36.
     expect(h.source.requestCount).toBe(42);
+  });
+});
+
+/**
+ * A file whose middle is gone, with the walk stalled just before it.
+ *
+ * Segments 2 to 18 are expired articles, segment 1's is held. Two readers set
+ * up a rotation first — a rotation is the only thing that defers a seek — so
+ * by the time this returns the fetcher has turned to segment 0, written it,
+ * and blocked on 1 with the dead run immediately ahead of it.
+ */
+async function stalledBeforeDeadRun(): Promise<Harness> {
+  const h = (openHarness = await harness(LONG));
+  const ids = h.post.file.segments.map((segment) => segment.messageId);
+  h.source.hold(ids[1]!);
+  for (let segment = 2; segment <= 18; segment += 1) {
+    h.source.fail(ids[segment]!, new Error('430 No such article'));
+  }
+
+  const stranded = reader(h, 0, 1);
+  expect((await reader(h, 20, 21)).equals(segmentsOf(h, 20, 21))).toBe(true);
+  expect((await stranded).equals(segmentsOf(h, 0, 1))).toBe(true);
+  return h;
+}
+
+describe('Download demand across a dead region', () => {
+  it('counts a dead segment towards the dwell, so a seek away is honoured', async () => {
+    const h = await stalledBeforeDeadRun();
+    const ids = h.post.file.segments.map((segment) => segment.messageId);
+
+    // The seek the spec describes: the user reaches a region the provider no
+    // longer has, sees the zeros it reads back as, and jumps away. It arrives
+    // while a rotation is protecting the current anchor, so it is deferred --
+    // and a dead segment costs two article requests to establish, so if that
+    // work did not advance the dwell nothing would release it until the run
+    // ended. Measured: the seek lands after the whole run and two more passes.
+    const seeker = reader(h, 38, 39);
+    h.source.release(ids[1]!);
+    expect((await seeker).equals(segmentsOf(h, 38, 39))).toBe(true);
+
+    // Sixteen segments of work after the turn to 0 -- two written, fourteen
+    // given up on -- and then the seek, exactly as if all sixteen had landed.
+    expect(writeOrder(h).slice(16, 17 + DEMAND_DWELL_SEGMENTS)).toEqual([
+      ...run(0, DEMAND_DWELL_SEGMENTS),
+      38,
+    ]);
+    // It turned away mid-run rather than grinding to the end of it.
+    expect(h.download.dead.runs).toEqual([[2, 16]]);
+  });
+});
+
+describe('Download demand on the common path', () => {
+  it('fetches every article exactly once for one sequential reader', async () => {
+    const h = (openHarness = await harness(LONG));
+    // One reader, no contention: the shape almost every byte of a real
+    // playback session takes. Pinned because the guard that makes it hold is
+    // four lines and a change to when coverage admits a segment relative to
+    // the notify beside it would defeat it with the rest of the suite green.
+    //
+    // 37 = the geometry probe, plus segments 4 to 39 once each: the reader's
+    // own range and the tail the walk carries on to. Before the demand policy
+    // this same read cost 67, because the reader asking for its next segment
+    // arrived looking like a backwards seek and re-anchored the walk, once
+    // per segment, abandoning what was in flight each time.
+    await collect(h.download.read(4 * SEG, 20 * SEG));
+    await vi.waitFor(() => {
+      expect(h.download.coverage.count).toBe(36);
+    });
+    await flush();
+
+    expect(h.source.requestCount).toBe(37);
   });
 });

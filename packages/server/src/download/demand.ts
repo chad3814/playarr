@@ -185,9 +185,26 @@ export class DemandPolicy {
     return anchor;
   }
 
-  /** Demands the running pass will not reach soon enough on its own. */
+  /**
+   * Demands the walk will not reach on its own before it would turn again.
+   *
+   * A dwell wide, not a prefetch window. The window that decides whether to
+   * abandon articles for a *hint* is the prefetch depth, because that is what
+   * abandoning costs; but a rotation is the fetcher choosing between two
+   * demands, and the only question there is which it reaches sooner. Filtered
+   * at prefetch, a demand `prefetch` segments ahead looks like a competitor:
+   * the fetcher pays `prefetch + 1` articles to reach a segment the walk was
+   * four away from, resets the dwell, leaves the segments it skipped as a
+   * fresh hole, and strands the reader parked at `from` until the sweep wraps
+   * back to it. Anything within a dwell arrives sooner by being walked to.
+   */
   #competing(from: number): readonly number[] {
-    return this.#notifier.segments().filter((segment) => !this.#imminent(segment, from));
+    return this.#notifier.segments().filter((segment) => !this.#nearby(segment, from));
+  }
+
+  /** True when the walk gets to `segment` within the dwell it would rotate on. */
+  #nearby(segment: number, from: number): boolean {
+    return segment >= from && segment < from + DEMAND_DWELL_SEGMENTS;
   }
 
   /**

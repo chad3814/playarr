@@ -250,6 +250,15 @@ export class SegmentFetcher {
 
     this.#retried.delete(segment);
     this.#dead.add(segment);
+    // The walk has left this segment, and giving up on it is progress the
+    // dwell has to count: it cost two article requests to establish, it moves
+    // the pass on exactly as a write does, and the dwell is the only thing
+    // that releases a demand a rotation deferred. Left uncounted, a run of
+    // expired articles holds the anchor for as long as the run lasts -- so the
+    // user who saw the garbage a dead region reads back as, and seeked away
+    // from it, waits out the rest of the run.
+    this.#position = segment + 1;
+    this.#policy.record();
     this.#observers.covered(segment);
     this.#reportDrained();
     this.#notifier.notify(segment);
