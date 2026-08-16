@@ -128,13 +128,41 @@ export class Download {
     return this.#notifier.wait(segment, signal);
   }
 
-  /** Fill every hole the provider still has. Used by the download-to-disk step. */
+  /**
+   * Fill every hole the provider still has. Used by the download-to-disk step.
+   *
+   * `target` is always the *lowest* hole, and the reader this races has not
+   * gone away: the Player keeps the `<video>` mounted behind the finished
+   * dialog, so it is still issuing range requests. One of those re-anchors the
+   * fetcher ahead of `target`, the fetcher walks to the end of the file, and
+   * on its own it would stop there — leaving `target` a hole, this `waitFor`
+   * parked on it forever, and `POST /complete` hanging with no timeout and no
+   * retry behind it. `fillHoles` is what stops the walk ending there.
+   *
+   * It is turned on here and nowhere else, and turned off again on the way
+   * out. The fetcher walking forward and stopping at the end of the file is
+   * the shape of the whole design — it is why a seek leaves holes and why this
+   * step exists at all. A fetcher that wrapped unconditionally would fill in
+   * behind `prime()`, which anchors at the head and seeks to the tail
+   * precisely so that everything between them is left alone, and turn every
+   * selection into an immediate download of the entire file.
+   *
+   * What this does *not* cover: outside this method a reader parked on a
+   * segment whose demand was superseded by a later `want()` can still be left
+   * unwoken if the fetcher then exhausts. Serving it means knowing what is
+   * still parked, which is a demand policy rather than the absence of a bug.
+   */
   async completeAll(): Promise<void> {
-    let target = this.#coverage.nextHoleExcluding(0, this.#dead);
-    while (target !== null && !this.#fetcher.stopped) {
-      this.want(target);
-      await this.waitFor(target);
-      target = this.#coverage.nextHoleExcluding(0, this.#dead);
+    this.#fetcher.fillHoles(true);
+    try {
+      let target = this.#coverage.nextHoleExcluding(0, this.#dead);
+      while (target !== null && !this.#fetcher.stopped) {
+        this.want(target);
+        await this.waitFor(target);
+        target = this.#coverage.nextHoleExcluding(0, this.#dead);
+      }
+    } finally {
+      this.#fetcher.fillHoles(false);
     }
   }
 

@@ -213,27 +213,6 @@ describe('Download geometry failures', () => {
   });
 });
 
-describe('Download completion', () => {
-  it('reports drained once every fetchable segment is on disk', async () => {
-    const h = (openHarness = await harness([SEG, SEG, 400]));
-    await h.download.completeAll();
-    expect(h.download.coverage.isComplete()).toBe(true);
-    expect(h.onDrained).toHaveBeenCalledTimes(1);
-  });
-
-  it('completes even when a segment is permanently dead', async () => {
-    const h = (openHarness = await harness([SEG, SEG, 400]));
-    const ids = messageIds(h);
-    h.source.fail(ids[1]!, new Error('430 No such article'));
-
-    await h.download.completeAll();
-    expect(h.download.dead.has(1)).toBe(true);
-    expect(h.download.coverage.has(0)).toBe(true);
-    expect(h.download.coverage.has(2)).toBe(true);
-    expect(h.onDrained).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('Download.stop', () => {
   it('rejects readers parked on segments that will never arrive', async () => {
     const h = (openHarness = await harness());

@@ -46,6 +46,7 @@ export class SegmentFetcher {
   #drained = false;
   /** The most recent demand not yet handed to a pass. Only one seek is live. */
   #wanted: number | null = null;
+  #fillHoles = false;
 
   constructor(options: FetcherOptions) {
     this.#handle = options.handle;
@@ -92,6 +93,17 @@ export class SegmentFetcher {
     this.#kick();
   }
 
+  /**
+   * Make an exhausted forward walk restart from the lowest hole rather than
+   * end, until turned off again. Off by default: holes behind the anchor are
+   * deliberate, and a fetcher that filled them unasked would turn `prime()`
+   * into a download of the whole file. `Download.completeAll` is the one
+   * caller that needs them filled, and it says why.
+   */
+  fillHoles(enabled: boolean): void {
+    this.#fillHoles = enabled;
+  }
+
   /** Resolves once nothing further will be written, so the fd can be closed. */
   async stop(): Promise<void> {
     this.#stopped = true;
@@ -116,12 +128,16 @@ export class SegmentFetcher {
   }
 
   /**
-   * Walk holes until there are none ahead and nothing further is wanted.
+   * Walk holes until there are none ahead and nothing further is wanted — or,
+   * under `fillHoles`, until there are none anywhere.
    *
    * `#running` is lowered in the `finally`, which is reachable only through the
    * unbroken synchronous stretch that follows the last read of `#wanted`. No
    * `want()` can interleave there, so a demand is either seen by the loop or
-   * arrives to find the fetcher idle and starts a new one — never neither.
+   * arrives to find the fetcher idle and starts a new one — never neither. The
+   * wrap below is synchronous and inside that stretch, so it does not widen the
+   * window; it terminates because each restart hands back a segment the next
+   * pass either covers or marks dead, so the fetchable count strictly falls.
    */
   async #run(startAnchor: number): Promise<void> {
     try {
@@ -141,6 +157,7 @@ export class SegmentFetcher {
         anchor = target === null ? null : await this.#pass(target);
         anchor = this.#wanted ?? anchor;
         this.#wanted = null;
+        anchor ??= this.#fillHoles ? this.#coverage.nextHoleExcluding(0, this.#dead) : null;
       }
     } finally {
       this.#running = false;
