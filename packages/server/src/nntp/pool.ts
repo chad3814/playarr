@@ -78,10 +78,11 @@ export class PoolManager {
     // the working pool in place. The swap above has already happened by the
     // time this runs, so a failure here — thrown synchronously or a rejected
     // promise — must not propagate: it would either surface as an unhandled
-    // rejection or make configure() throw after it already succeeded. There
-    // is no logger in this codebase yet (Task 13 adds one); once it exists,
-    // this is the seam to report the failure through instead of discarding
-    // it.
+    // rejection or make configure() throw after it already succeeded. A
+    // logger exists elsewhere in this codebase now, but PoolManager has none
+    // of its own, and giving it one would mean changing this constructor —
+    // no caller has needed that yet, so the failure is still deliberately
+    // discarded here rather than reported.
     try {
       void Promise.resolve(previous?.destroy()).catch(() => {
         // Discarded — see the comment above.

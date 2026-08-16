@@ -1,7 +1,8 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
+import pino, { type LevelWithSilent } from 'pino';
 import { vi, type Mock } from 'vitest';
 import type { JobDto } from '@playarr/shared';
 import { buildApp } from '../src/app.ts';
@@ -49,6 +50,32 @@ export interface FixtureOptions {
   readonly sizes?: readonly number[];
   /** Defaults to true. False builds an app with no provider configured. */
   readonly configured?: boolean;
+  /** Defaults to a silent logger. Pass one from `testLogger` to assert on a log line. */
+  readonly logger?: FastifyBaseLogger;
+}
+
+/**
+ * A real pino logger, decoded back into objects for assertions.
+ *
+ * Default level is `'silent'`, so a fixture built without an explicit
+ * `logger` produces no output — the whole reason this exists rather than
+ * `logger: true`. A test that wants to assert on a log line raises the level
+ * and reads `lines` back.
+ */
+export function testLogger(level: LevelWithSilent = 'silent'): {
+  readonly logger: FastifyBaseLogger;
+  readonly lines: readonly Record<string, unknown>[];
+} {
+  const lines: Record<string, unknown>[] = [];
+  const logger = pino(
+    { level },
+    {
+      write: (line: string) => {
+        lines.push(JSON.parse(line) as Record<string, unknown>);
+      },
+    },
+  );
+  return { logger, lines };
 }
 
 /** Turn a synthetic post into the NZB XML the upload endpoint expects. */
@@ -143,6 +170,7 @@ export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     config: new ConfigStore(join(root, 'config.json')),
     pool,
     env: {},
+    logger: options.logger ?? testLogger().logger,
   });
 
   const subject = options.subject ?? '[1/1] - &quot;Some.Film.mp4&quot; yEnc (1/4)';

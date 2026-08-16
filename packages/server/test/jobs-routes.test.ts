@@ -9,6 +9,7 @@ import { ConfigStore } from '../src/config/store.ts';
 import { JobStore, type JobRecord } from '../src/jobs/store.ts';
 import { JobManager } from '../src/jobs/manager.ts';
 import { PoolManager } from '../src/nntp/pool.ts';
+import { testLogger } from './app-fixture.ts';
 
 /**
  * A store whose `create` fails after the parse would have succeeded, the way
@@ -45,6 +46,7 @@ async function makeAppWithStore(root: string, store: JobStore): Promise<FastifyI
     config: new ConfigStore(join(root, 'config.json')),
     pool,
     env: {},
+    logger: testLogger().logger,
   });
   app = built;
   return built;

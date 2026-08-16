@@ -1,6 +1,6 @@
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { coveredBytes, type JobDto } from '@playarr/shared';
 import type { ConfigStore } from './config/store.ts';
 import { HttpError } from './errors.ts';
@@ -20,6 +20,12 @@ export interface AppDeps {
   readonly config: ConfigStore;
   readonly pool: PoolManager;
   readonly env: NodeJS.ProcessEnv;
+  /**
+   * Live (real pino) in production, silent in tests. Injected rather than
+   * built here so a test can supply a non-silent one and assert on a log
+   * line, and so `npm test` stays quiet by default.
+   */
+  readonly logger: FastifyBaseLogger;
   /** Built client assets. Omitted in tests. */
   readonly clientDir?: string;
 }
@@ -87,11 +93,14 @@ async function registerClientFallback(
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // `logger: false` resolves to abstract-logging's no-op, so every app.log
-  // call below (and every route's) would otherwise vanish silently. A real
-  // pino instance is what makes the 500 branch's app.log.error actually
-  // record something. Fastify's own request/response lines go through it too,
-  // never a credential: nothing here logs a request body.
-  const app = Fastify({ logger: true, bodyLimit: 1_048_576 });
+  // call below (and every route's) would otherwise vanish silently.
+  // `loggerInstance` (not `logger`, which Fastify only accepts as a plain
+  // options object) hands Fastify `deps.logger` directly — a real logger,
+  // live in production and silent in tests (see AppDeps) — so the 500
+  // branch's app.log.error actually records something wherever it matters.
+  // Fastify's own request/response lines go through it too, never a
+  // credential: nothing here logs a request body.
+  const app = Fastify({ loggerInstance: deps.logger, bodyLimit: 1_048_576 });
 
   // NZBs are XML and rarely large; 64 MiB is generous and bounded.
   await app.register(multipart, { limits: { fileSize: 64 * 1_048_576, files: 1 } });
