@@ -10,6 +10,7 @@ import { JobManager } from '../src/jobs/manager.ts';
 import type { JobState } from '../src/jobs/state.ts';
 import { JobStore } from '../src/jobs/store.ts';
 import { PoolManager, type PoolLike } from '../src/nntp/pool.ts';
+import { GatedArticleSource } from './gated-source.ts';
 import { buildPost, type Post } from './post.ts';
 
 export const SEG = 1_000;
@@ -36,6 +37,8 @@ export interface Fixture {
   readonly pool: PoolManager;
   readonly manager: JobManager;
   readonly post: Post;
+  /** Wraps the post's articles, so a test can park a call inside a fetch. */
+  readonly source: GatedArticleSource;
   readonly jobId: string;
   readonly onError: Mock<(jobId: string, error: Error) => void>;
 }
@@ -82,11 +85,11 @@ export function selectRequest(
 }
 
 /** A pool that serves one synthetic post and never opens a socket. */
-function poolFor(post: Post, configured: boolean): PoolManager {
+function poolFor(source: GatedArticleSource, configured: boolean): PoolManager {
   const pool = new PoolManager(
     () =>
       ({
-        body: (id: string) => post.source.body(id),
+        body: (id: string) => source.body(id),
         destroy: () => {},
         failures: [],
       }) as PoolLike,
@@ -112,7 +115,8 @@ export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'playarr-select-'));
   const store = new RefusingStore(join(root, 'jobs'));
   await store.scan();
-  const pool = poolFor(post, options.configured !== false);
+  const source = new GatedArticleSource(post.source);
+  const pool = poolFor(source, options.configured !== false);
 
   // Injected in every test so a background failure is asserted on rather than
   // written to stderr, and so a happy path can prove none was reported.
@@ -135,7 +139,7 @@ export async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     })
   ).json<JobDto>();
 
-  current = { app, store, pool, manager, post, jobId: created.id, onError };
+  current = { app, store, pool, manager, post, source, jobId: created.id, onError };
   return current;
 }
 

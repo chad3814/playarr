@@ -1,7 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { closeFixture, fixture, selectRequest, SEG } from './select-harness.ts';
+import type { JobDto } from '@playarr/shared';
+import { closeFixture, fixture, selectRequest, SEG, type Fixture } from './select-harness.ts';
 
 afterEach(closeFixture);
+
+/** Put a job in exactly the state `markJobFailed` leaves behind. */
+async function failJob(f: Fixture): Promise<void> {
+  const record = f.store.get(f.jobId)!;
+  await f.store.update(
+    f.jobId,
+    {
+      ...record.state,
+      status: 'failed',
+      failure: { code: 'non-uniform-geometry', message: 'variable article sizes' },
+    },
+    { flush: true },
+  );
+}
 
 describe('JobManager.activate', () => {
   it('resumes a released job from its persisted coverage', async () => {
@@ -67,6 +82,76 @@ describe('JobManager.activeRecord', () => {
   });
 });
 
+describe('JobManager single-flight ownership', () => {
+  it('stops and closes the download a concurrent selection displaces', async () => {
+    const f = await fixture();
+    const probe = f.post.file.segments[0]!.messageId;
+    const tail = f.post.file.segments[3]!.messageId;
+    f.source.hold(probe);
+    f.source.hold(tail);
+
+    // A parks inside #open, on the one article openNzbFile fetches.
+    const a = f.app.inject(selectRequest(f.jobId, 0));
+    await vi.waitFor(() => {
+      expect(f.source.requested).toContain(probe);
+    });
+
+    // B starts while A is mid-probe. Ungated it walks into its own #open and
+    // races A to `#active`; gated it waits for A to finish.
+    const b = f.app.inject(selectRequest(f.jobId, 0));
+    // One whole event-loop turn, then a negative assertion: A is still parked
+    // on the held probe and has not reached #begin, so the two calls really do
+    // overlap rather than running back to back.
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(f.manager.active()).toBeNull();
+    f.source.release(probe);
+
+    // A now owns the job and is parked in prime(), waiting for the tail. The
+    // wait is generous because reaching #begin costs a decode plus a real
+    // state.json write and rename, and this asserts what happened, not how
+    // fast a loaded machine got there.
+    await vi.waitFor(() => expect(f.manager.active()).not.toBeNull(), { timeout: 10_000 });
+    const displaced = f.manager.active()!;
+
+    f.source.release(tail);
+    expect((await a).statusCode).toBe(200);
+    expect((await b).statusCode).toBe(200);
+
+    expect(f.manager.activeId).toBe(f.jobId);
+    expect(f.manager.active()).not.toBe(displaced);
+    // The descriptor A opened was closed, so nothing is writing behind B.
+    await expect(displaced.fd.read(Buffer.alloc(1), 0, 1, 0)).rejects.toThrow(/file closed|EBADF/u);
+    // ...and A's fetcher was stopped, so nothing will ever notify segment 2.
+    await expect(displaced.waitFor(2)).rejects.toThrow();
+    expect(f.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('JobManager stale failures', () => {
+  it('drops a previous attempt’s failure when a selection succeeds', async () => {
+    const f = await fixture();
+    await failJob(f);
+
+    const job = (await f.app.inject(selectRequest(f.jobId, 0))).json<JobDto>();
+    expect(job.status).toBe('ready');
+    expect(job.failure).toBeUndefined();
+    expect(f.store.get(f.jobId)?.state.failure).toBeUndefined();
+  });
+
+  it('drops it when a resume succeeds', async () => {
+    const f = await fixture();
+    await f.app.inject(selectRequest(f.jobId, 0));
+    await f.manager.releaseAll();
+    await failJob(f);
+
+    await f.manager.activate(f.jobId);
+    expect(f.store.get(f.jobId)?.state.status).toBe('ready');
+    expect(f.store.get(f.jobId)?.state.failure).toBeUndefined();
+  });
+});
+
 describe('JobManager background persistence failures', () => {
   it('reports a rejected coverage write instead of leaving it unhandled', async () => {
     const f = await fixture();
@@ -77,9 +162,9 @@ describe('JobManager background persistence failures', () => {
     // article fetch, a real onCoverage call, and a real write behind it.
     f.manager.active()!.want(1);
 
-    await vi.waitFor(() => {
-      expect(f.onError).toHaveBeenCalled();
-    });
+    // Generous for the same reason as above: a real article fetch and a real
+    // rejected write stand between want() and the report.
+    await vi.waitFor(() => expect(f.onError).toHaveBeenCalled(), { timeout: 10_000 });
     expect(f.onError.mock.calls[0]?.[0]).toBe(f.jobId);
     expect(f.onError.mock.calls[0]?.[1].message).toContain('ENOSPC');
   });

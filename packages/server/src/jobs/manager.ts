@@ -9,7 +9,13 @@ import { HttpError } from '../errors.ts';
 import { NotConfiguredError, type PoolManager } from '../nntp/pool.ts';
 import { isMp4Name } from './candidates.ts';
 import { resolveOutputName } from './naming.ts';
-import { jobObservers, markJobFailed, persistCoverage, type JobProgress } from './progress.ts';
+import {
+  jobObservers,
+  markJobFailed,
+  persistCoverage,
+  withStatus,
+  type JobProgress,
+} from './progress.ts';
 import { reportToStderr, type JobErrorReporter } from './reporting.ts';
 import type { JobSelection } from './state.ts';
 import type { JobRecord, JobStore } from './store.ts';
@@ -40,12 +46,23 @@ interface Active {
  *
  * Exactly one Download exists at a time, so the whole connection pool serves
  * whatever is being watched. Starting another job releases the current one.
+ *
+ * Every method that moves that ownership is single-flight, because none of
+ * them is atomic: each yields at a provider round trip between reading
+ * `#active` and replacing it, and Fastify serves requests concurrently. Two
+ * overlapping selects would otherwise both find no active job, both build a
+ * Download, and the second would overwrite `#active` without stopping the
+ * first — leaving a fetcher consuming pool connections forever, a descriptor
+ * nothing can reach to close, and, for the same job, a `w+` open truncating
+ * the file the first one is mid-write on.
  */
 export class JobManager {
   readonly #store: JobStore;
   readonly #pool: PoolManager;
   readonly #report: JobErrorReporter;
   #active: Active | null = null;
+  /** Tail of the queue of ownership changes. Never rejects; see `#serialize`. */
+  #gate: Promise<unknown> = Promise.resolve();
 
   constructor(store: JobStore, pool: PoolManager, onError: JobErrorReporter = reportToStderr) {
     this.#store = store;
@@ -67,7 +84,46 @@ export class JobManager {
   }
 
   /** Probe the chosen file, size the sparse file, and prime head and tail. */
-  async select(id: string, fileIndex: number): Promise<JobRecord> {
+  select(id: string, fileIndex: number): Promise<JobRecord> {
+    return this.#serialize(() => this.#select(id, fileIndex));
+  }
+
+  /** Resume a job that already has a selection — after a restart, or after a pause. */
+  activate(id: string): Promise<Download> {
+    return this.#serialize(() => this.#activate(id));
+  }
+
+  /** Stop and forget the active download, if it is this job. */
+  release(id: string): Promise<void> {
+    return this.#serialize(async () => {
+      if (this.#active?.id === id) {
+        await this.#releaseAll();
+      }
+    });
+  }
+
+  releaseAll(): Promise<void> {
+    return this.#serialize(() => this.#releaseAll());
+  }
+
+  /**
+   * Run `work` once every ownership change queued before it has finished.
+   *
+   * The queue itself never rejects: a failure belongs to the caller that asked
+   * for the work, and must not cancel or be re-thrown at whoever is next in
+   * line. Nothing reachable from `work` may call back into a public mutator
+   * and await it, which would wait on a gate `work` is itself holding —
+   * `#select` and friends call the `#`-prefixed bodies directly for that
+   * reason. `JobProgress.stop` is the one exception, and it is deliberately
+   * launched rather than awaited.
+   */
+  #serialize<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.#gate.then(work);
+    this.#gate = next.catch(() => {});
+    return next;
+  }
+
+  async #select(id: string, fileIndex: number): Promise<JobRecord> {
     const record = this.#record(id);
     this.#requireConfigured();
 
@@ -76,7 +132,7 @@ export class JobManager {
       throw new HttpError(400, 'bad-file-index', `No file ${fileIndex} in this NZB.`);
     }
 
-    await this.releaseAll();
+    await this.#releaseAll();
 
     const handle = await this.#open(file);
     if (!handle.geometry.uniform) {
@@ -93,8 +149,7 @@ export class JobManager {
     return this.#record(id);
   }
 
-  /** Resume a job that already has a selection — after a restart, or after a pause. */
-  async activate(id: string): Promise<Download> {
+  async #activate(id: string): Promise<Download> {
     if (this.#active?.id === id) {
       return this.#active.download;
     }
@@ -110,7 +165,7 @@ export class JobManager {
       throw new HttpError(409, 'bad-file-index', 'The selected file is no longer in this NZB.');
     }
 
-    await this.releaseAll();
+    await this.#releaseAll();
 
     // Costs one article: openNzbFile has no entry point that accepts geometry
     // we already know.
@@ -126,18 +181,11 @@ export class JobManager {
     }
 
     const active = this.#begin(id, handle, fd, new SegmentCoverage(count, selection.covered), dead);
-    await this.#store.update(id, { ...record.state, status: 'ready' }, { flush: true });
+    await this.#store.update(id, withStatus(record.state, 'ready'), { flush: true });
     return active.download;
   }
 
-  async release(id: string): Promise<void> {
-    if (this.#active?.id !== id) {
-      return;
-    }
-    await this.releaseAll();
-  }
-
-  async releaseAll(): Promise<void> {
+  async #releaseAll(): Promise<void> {
     const active = this.#active;
     this.#active = null;
     if (active === null) {
@@ -149,7 +197,7 @@ export class JobManager {
 
     const record = this.#store.get(active.id);
     if (record !== undefined && record.state.status === 'ready') {
-      await this.#store.update(active.id, { ...record.state, status: 'paused' }, { flush: true });
+      await this.#store.update(active.id, withStatus(record.state, 'paused'), { flush: true });
     }
   }
 
@@ -187,7 +235,7 @@ export class JobManager {
     const fd = await open(join(record.dir, selection.name), 'w+');
     try {
       await fd.truncate(handle.size);
-      const next = { ...record.state, status: 'ready' as const, selection };
+      const next = { ...withStatus(record.state, 'ready'), selection };
       await this.#store.update(id, next, { flush: true });
 
       const count = selection.geometry.segmentCount;
@@ -204,7 +252,7 @@ export class JobManager {
   /** Close a descriptor that never became the active job's; release it if it did. */
   async #abandon(fd: FileHandle): Promise<void> {
     if (this.#active?.fd === fd) {
-      await this.releaseAll();
+      await this.#releaseAll();
       return;
     }
     await fd.close();

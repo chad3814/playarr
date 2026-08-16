@@ -1,3 +1,4 @@
+import type { JobStatus } from '@playarr/shared';
 import type { SegmentCoverage } from '../coverage/coverage.ts';
 import type { FatalDownloadError } from '../download/errors.ts';
 import type { ObserverOptions } from '../download/observers.ts';
@@ -14,6 +15,19 @@ export interface JobProgress {
   readonly report: JobErrorReporter;
   /** Give up the descriptor, once the job has been marked failed. */
   readonly stop: () => Promise<void>;
+}
+
+/**
+ * Move a job to a status that is not a failure.
+ *
+ * Drops any `failure` a previous attempt left behind. A plain spread keeps it,
+ * so a job that failed and was then successfully re-selected would come back
+ * as 'ready' with a stale failure attached — which `toJobDto` copies straight
+ * into the API response, telling a client that a working job is broken.
+ */
+export function withStatus(state: JobState, next: JobStatus): JobState {
+  const { failure: _cleared, ...rest } = state;
+  return { ...rest, status: next };
 }
 
 /**
@@ -73,7 +87,7 @@ async function recordDrained(progress: JobProgress): Promise<void> {
   if (record === undefined || record.state.status === 'complete') {
     return;
   }
-  await store.update(jobId, { ...record.state, status: 'complete' }, { flush: true });
+  await store.update(jobId, withStatus(record.state, 'complete'), { flush: true });
 }
 
 async function recordFatal(progress: JobProgress, error: FatalDownloadError): Promise<void> {
