@@ -207,7 +207,31 @@ export class JobStateWriter {
     this.#arm();
   }
 
-  flush(): Promise<void> {
+  /**
+   * Two passes, because a timer-driven write that is failing has already taken
+   * its state out of `#pending` and does not hand it back until its own catch
+   * handler runs. That handler is the tail of `#inFlight`, so it is still
+   * queued behind the promise the first pass awaits: during that window
+   * `#pending` reads as null and the first pass writes nothing. Returning
+   * there would let `dispose()` report a clean shutdown while the state is
+   * only in memory, owned by an unref'd retry timer that exit will never run.
+   *
+   * One re-check is enough. Awaiting `#inFlight` drains every handler that can
+   * restore `#pending`, and `#flushOnce` clears the debounce synchronously
+   * before it awaits, so no further timer-driven write can start underneath.
+   */
+  async flush(): Promise<void> {
+    await this.#flushOnce();
+    if (this.#pending !== null) {
+      await this.#flushOnce();
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.flush();
+  }
+
+  #flushOnce(): Promise<void> {
     if (this.#timer !== null) {
       clearTimeout(this.#timer);
       this.#timer = null;
@@ -221,10 +245,6 @@ export class JobStateWriter {
     // cannot permanently jam every write after it.
     this.#inFlight = this.#inFlight.catch(() => {}).then(() => writeJobState(this.#dir, state));
     return this.#inFlight;
-  }
-
-  async dispose(): Promise<void> {
-    await this.flush();
   }
 
   #arm(): void {

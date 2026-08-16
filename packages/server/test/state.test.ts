@@ -270,13 +270,25 @@ describe('JobStateWriter - onError defaults', () => {
     vi.useFakeTimers();
     const dir = await scratch();
     const writer = new JobStateWriter(dir, 1_000);
-    vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('boom')));
+    let rejectWrite: (error: Error) => void = noop;
+    vi.mocked(writeFile).mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
 
     writer.schedule({ ...sample, status: 'paused' });
     await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await writer.flush();
+    // The timer has already taken the state out of the writer and its write is
+    // hanging, so a flush entered here sees nothing pending. Failing the write
+    // only once flush() is under way drives the default onError and pins the
+    // window where the state lives nowhere but in memory: flush() has to land
+    // it rather than leave it to a retry timer a shutdown would never run.
+    const flushed = writer.flush();
+    rejectWrite(new Error('boom'));
+    await flushed;
+
     expect((await readJobState(dir)).status).toBe('paused');
     await writer.dispose();
   });
