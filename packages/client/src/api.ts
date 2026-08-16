@@ -5,6 +5,7 @@ import type {
   JobFailure,
   JobStatus,
   NntpSecurity,
+  ProgressEvent,
   SegmentRun,
   SelectionDto,
   SelectRequest,
@@ -97,6 +98,27 @@ function isSelectionDto(value: unknown): value is SelectionDto {
     Array.isArray(value['dead']) &&
     value['dead'].every((entry) => isNumber(entry)) &&
     isNumber(value['coveredBytes'])
+  );
+}
+
+/**
+ * Validates an SSE `message` frame from `/api/jobs/:id/events`.
+ *
+ * Exported so `useEventSource` can narrow the untyped event data into
+ * `ProgressEvent` field by field, the same standard every DTO here is held to,
+ * rather than casting it.
+ */
+export function isProgressEvent(value: unknown): value is ProgressEvent {
+  return (
+    isRecord(value) &&
+    isJobStatus(value['status']) &&
+    Array.isArray(value['covered']) &&
+    value['covered'].every((entry) => isSegmentRun(entry)) &&
+    Array.isArray(value['dead']) &&
+    value['dead'].every((entry) => isNumber(entry)) &&
+    isNumber(value['coveredBytes']) &&
+    isNumber(value['size']) &&
+    isNumber(value['bytesPerSecond'])
   );
 }
 

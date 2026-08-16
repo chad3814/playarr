@@ -21,3 +21,25 @@ function textPolyfill(this: Blob): Promise<string> {
 if (typeof Blob.prototype.text !== 'function') {
   Blob.prototype.text = textPolyfill;
 }
+
+/**
+ * jsdom does not implement `EventSource` at all, unlike every real browser.
+ * `useEventSource` (used by the Player view) subscribes to the job progress
+ * SSE endpoint with it via `addEventListener('message', ...)`, so tests need
+ * a minimal stand-in. Extending the real `EventTarget` (which jsdom does
+ * implement) gives add/removeEventListener for free instead of hand-rolling
+ * them.
+ *
+ * `StubEventSource as typeof EventSource` typechecks directly (no `unknown`
+ * bridge needed) because the real `EventSource`'s instance type is assignable
+ * to this narrower one, which is the direction TypeScript's type-assertion
+ * overlap check requires.
+ */
+class StubEventSource extends EventTarget {
+  constructor(readonly url: string) {
+    super();
+  }
+  close(): void {}
+}
+
+globalThis.EventSource ??= StubEventSource as typeof EventSource;
