@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JobStore, type JobRecord } from '../src/jobs/store.ts';
-import { writeJobState } from '../src/jobs/state.ts';
+import { readJobState, writeJobState } from '../src/jobs/state.ts';
 
 // Mocked so the onWriteError test can inject a rejection into a specific
 // write without touching the timer-driven retry logic under test.
@@ -167,6 +167,54 @@ describe('JobStore.remove', () => {
     expect(store.get('job1')).toBeUndefined();
     await expect(stat(join(root, 'job1'))).rejects.toThrow();
     await store.dispose();
+  });
+});
+
+describe('JobStore.remove - a failing final write', () => {
+  it('deletes the directory even when the last state write fails', async () => {
+    const root = await scratch();
+    const store = fixedStore(root);
+    const record = await store.create('release.nzb', Buffer.from(NZB, 'utf8'));
+
+    await store.update('job1', { ...record.state, status: 'complete' });
+    vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('ENOSPC')));
+    await store.remove('job1');
+
+    expect(store.get('job1')).toBeUndefined();
+    await expect(stat(join(root, 'job1'))).rejects.toThrow();
+    await store.dispose();
+  });
+});
+
+describe('JobStore.dispose - one writer failing must not abandon the rest', () => {
+  it('flushes every writer and reports every failure', async () => {
+    const root = await scratch();
+    const store = fixedStore(root);
+    const one = await store.create('a.nzb', Buffer.from(NZB, 'utf8'));
+    const two = await store.create('b.nzb', Buffer.from(NZB, 'utf8'));
+    const three = await store.create('c.nzb', Buffer.from(NZB, 'utf8'));
+
+    // Deleting the directories is what makes the first two writes fail, so the
+    // failure is a real ENOENT from the filesystem rather than a mock whose
+    // turn depends on the order the writers happen to start in.
+    await rm(join(root, 'job1'), { recursive: true, force: true });
+    await rm(join(root, 'job2'), { recursive: true, force: true });
+    await store.update('job1', { ...one.state, status: 'paused' });
+    await store.update('job2', { ...two.state, status: 'paused' });
+    await store.update('job3', { ...three.state, status: 'complete' });
+
+    const failure = await store.dispose().then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining('job1, job2'),
+      errors: [expect.any(Error), expect.any(Error)],
+    });
+    // The surviving writer must have been flushed and awaited, not abandoned
+    // the moment the first one rejected.
+    expect((await readJobState(join(root, 'job3'))).status).toBe('complete');
   });
 });
 

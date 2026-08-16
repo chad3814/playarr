@@ -130,7 +130,15 @@ export class JobStore {
       return;
     }
     this.#records.delete(id);
-    await record.writer.dispose();
+    // Dispose to stop the debounce and let go of the pending state, but do not
+    // gate the removal on it succeeding. The only thing that dispose can fail
+    // at here is writing state.json into the directory the next line deletes,
+    // so the failure is moot; letting it propagate would strand a directory
+    // whose record is already gone, and nothing would ever come back for it.
+    // A rejected dispose still leaves the writer quiescent — it takes the
+    // state out of `#pending` and clears the timer before the write it fails
+    // on — so nothing keeps retrying against the deleted directory.
+    await record.writer.dispose().catch(() => {});
     await rm(record.dir, { recursive: true, force: true });
   }
 
@@ -147,8 +155,43 @@ export class JobStore {
     }
   }
 
+  /**
+   * Every writer gets its chance to flush before any failure is raised.
+   * `Promise.all` would settle on the first rejection, so one job with an
+   * unwritable directory would leave the shutdown free to exit while every
+   * other job's final write was still in flight — a wider version of the loss
+   * this dispose exists to prevent — and it would discard all but one of the
+   * failures.
+   *
+   * The failures are raised rather than routed to `onWriteError`, which is for
+   * the background timer path that has no caller to tell. A shutdown does have
+   * one, and it is the only party that can decide whether losing this state is
+   * fatal, so it is given every failure at once instead of one of them.
+   */
   async dispose(): Promise<void> {
-    await Promise.all([...this.#records.values()].map((record) => record.writer.dispose()));
+    const failures = new Map<string, Error>();
+    await Promise.all(
+      [...this.#records.entries()].map(async ([id, record]) => {
+        try {
+          await record.writer.dispose();
+        } catch (error) {
+          failures.set(id, error instanceof Error ? error : new Error(String(error)));
+        }
+      }),
+    );
+    if (failures.size === 0) {
+      return;
+    }
+    // Reported in record order rather than in the order the failures happened
+    // to land, so the same set of unwritable jobs always reads the same way.
+    const lost = [...this.#records.keys()].flatMap((id) => {
+      const error = failures.get(id);
+      return error === undefined ? [] : [{ id, error }];
+    });
+    throw new AggregateError(
+      lost.map((entry) => entry.error),
+      `job state was not flushed for: ${lost.map((entry) => entry.id).join(', ')}`,
+    );
   }
 
   async #scanEntry(name: string): Promise<void> {
