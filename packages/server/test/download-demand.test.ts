@@ -165,6 +165,41 @@ describe('Download demand across a dead region', () => {
   });
 });
 
+describe('Download demand for a candidate the walk is nearly at', () => {
+  it('walks the last few segments rather than paying a rotation for them', async () => {
+    const h = (openHarness = await harness(LONG));
+    const ids = h.post.file.segments.map((segment) => segment.messageId);
+    h.source.hold(ids[5]!);
+
+    // The head reader parks at 0 and is superseded, the walk from 21 spends a
+    // dwell, and the fetcher rotates back to it. That rotation is the setup:
+    // under it a hint cannot move the walk, so the only thing that can is the
+    // rotation rule, which is what this pins. It writes 0 to 4 and blocks.
+    const head = reader(h, 0, 17);
+    expect((await reader(h, 21, 22)).equals(segmentsOf(h, 21, 22))).toBe(true);
+    await vi.waitFor(() => {
+      expect(h.download.coverage.has(4)).toBe(true);
+    });
+
+    // Parked four ahead of where the walk stands when its dwell runs out.
+    const ahead = reader(h, 20, 21);
+    h.source.release(ids[5]!);
+
+    expect((await head).equals(segmentsOf(h, 0, 17))).toBe(true);
+    expect((await ahead).equals(segmentsOf(h, 20, 21))).toBe(true);
+    await vi.waitFor(() => {
+      expect(h.download.coverage.count).toBe(40);
+    });
+
+    // Unbroken from 0 to 20. Filtered at the prefetch window instead, the
+    // fetcher abandons the walk at 16 to reach 20 -- five articles to arrive
+    // four segments early -- leaving [16,20) as a fresh hole and the head
+    // reader stranded at 16 until the sweep wraps back to it, which reads
+    // 0..15, 20, 37, 38, 39, 16..19.
+    expect(writeOrder(h).slice(DEMAND_DWELL_SEGMENTS)).toEqual([...run(0, 21), 37, 38, 39]);
+  });
+});
+
 describe('Download demand on the common path', () => {
   it('fetches every article exactly once for one sequential reader', async () => {
     const h = (openHarness = await harness(LONG));

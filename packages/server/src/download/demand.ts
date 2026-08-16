@@ -92,7 +92,14 @@ export class DemandPolicy {
     this.#fillHoles = enabled;
   }
 
-  /** Count a segment written under the current anchor, towards the dwell. */
+  /**
+   * Count a segment the walk has finished with under the current anchor.
+   *
+   * Written or given up on: a dead segment cost two article requests to
+   * establish and moved the pass on just as a write does, and counting it is
+   * what stops a run of expired articles holding an anchor for the length of
+   * the run. See the dead branch of `SegmentFetcher.#recover`.
+   */
   record(): void {
     this.#served += 1;
   }
@@ -196,15 +203,30 @@ export class DemandPolicy {
    * the fetcher pays `prefetch + 1` articles to reach a segment the walk was
    * four away from, resets the dwell, leaves the segments it skipped as a
    * fresh hole, and strands the reader parked at `from` until the sweep wraps
-   * back to it. Anything within a dwell arrives sooner by being walked to.
+   * back to it.
+   *
+   * What excluding a candidate buys is only that it stops being a *reason* to
+   * turn. It does not pin the walk in place: with a demand behind as well, the
+   * sweep finds no candidate above and wraps, so the fetcher can still rotate
+   * backwards past a segment it was four away from. That is deliberate — the
+   * reader behind has been waiting longer, and the one ahead is reached on the
+   * way back — and it is bounded by the dwell like every other turn.
    */
   #competing(from: number): readonly number[] {
     return this.#notifier.segments().filter((segment) => !this.#nearby(segment, from));
   }
 
-  /** True when the walk gets to `segment` within the dwell it would rotate on. */
+  /**
+   * True when the walk gets to `segment` within the dwell it would rotate on.
+   *
+   * Floored at the prefetch depth, which is `connections` and has no upper
+   * bound in settings. Above sixteen of those a bare dwell would be the
+   * *narrower* of the two windows, readmitting candidates inside the prefetch
+   * window and restoring the pathology this exists to prevent.
+   */
   #nearby(segment: number, from: number): boolean {
-    return segment >= from && segment < from + DEMAND_DWELL_SEGMENTS;
+    const reach = Math.max(this.#prefetch, DEMAND_DWELL_SEGMENTS);
+    return segment >= from && segment < from + reach;
   }
 
   /**
