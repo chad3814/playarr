@@ -75,8 +75,20 @@ export class PoolManager {
     this.#connections = settings.connections;
     this.#description = `${settings.host}:${settings.port}`;
     // Destroyed after the replacement exists, so a failed construction leaves
-    // the working pool in place.
-    void previous?.destroy();
+    // the working pool in place. The swap above has already happened by the
+    // time this runs, so a failure here — thrown synchronously or a rejected
+    // promise — must not propagate: it would either surface as an unhandled
+    // rejection or make configure() throw after it already succeeded. There
+    // is no logger in this codebase yet (Task 13 adds one); once it exists,
+    // this is the seam to report the failure through instead of discarding
+    // it.
+    try {
+      void Promise.resolve(previous?.destroy()).catch(() => {
+        // Discarded — see the comment above.
+      });
+    } catch {
+      // Discarded — see the comment above.
+    }
   }
 
   /**

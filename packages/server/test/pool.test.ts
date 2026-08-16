@@ -24,6 +24,13 @@ function fakePool(overrides: Partial<PoolLike> = {}): PoolLike {
   };
 }
 
+/** Lets a rejected promise's unhandled-rejection check run before asserting. */
+function afterMicrotasks(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 describe('PoolManager configuration lifecycle', () => {
   it('reports itself unconfigured before configure is called', () => {
     const manager = new PoolManager(() => fakePool());
@@ -63,6 +70,63 @@ describe('PoolManager configuration lifecycle', () => {
     await manager.destroy();
     expect(pool.destroy).toHaveBeenCalledTimes(1);
     expect(manager.isConfigured()).toBe(false);
+  });
+});
+
+describe('PoolManager reconfiguration cleanup failures: synchronous throw', () => {
+  it('swaps to the new pool without throwing when the previous pool destroy() throws synchronously', () => {
+    const first = fakePool({
+      destroy: vi.fn(() => {
+        throw new Error('destroy boom');
+      }),
+    });
+    const second = fakePool();
+    let call = 0;
+    const manager = new PoolManager(() => (call++ === 0 ? first : second));
+
+    manager.configure(settings, { user: 'a', pass: 'b' });
+    expect(() =>
+      manager.configure({ ...settings, host: 'other.example.com' }, { user: 'a', pass: 'b' }),
+    ).not.toThrow();
+
+    expect(manager.isConfigured()).toBe(true);
+    expect(manager.source()).toBe(second);
+  });
+});
+
+describe('PoolManager reconfiguration cleanup failures: rejected promise', () => {
+  it('swaps to the new pool without an unhandled rejection when the previous pool destroy() rejects', async () => {
+    // A plain function, not `vi.fn()`: vitest's mock wrapper attaches its own
+    // `.then(onFulfilled, onRejected)` to any promise a mock returns, purely
+    // to record `mock.settledResults` — which itself counts as "handled" for
+    // Node's unhandled-rejection detection regardless of what the caller
+    // does. Only a bare rejecting promise proves this test would fail
+    // without the fix in `configure()`.
+    let destroyCalled = false;
+    const first = fakePool({
+      destroy: () => {
+        destroyCalled = true;
+        return Promise.reject(new Error('destroy boom'));
+      },
+    });
+    const second = fakePool();
+    let call = 0;
+    const manager = new PoolManager(() => (call++ === 0 ? first : second));
+
+    const onUnhandledRejection = vi.fn();
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    manager.configure(settings, { user: 'a', pass: 'b' });
+    manager.configure({ ...settings, host: 'other.example.com' }, { user: 'a', pass: 'b' });
+
+    await afterMicrotasks();
+    await afterMicrotasks();
+    process.off('unhandledRejection', onUnhandledRejection);
+
+    expect(destroyCalled).toBe(true);
+    expect(onUnhandledRejection).not.toHaveBeenCalled();
+    expect(manager.isConfigured()).toBe(true);
+    expect(manager.source()).toBe(second);
   });
 });
 
