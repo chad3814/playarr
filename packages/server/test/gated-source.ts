@@ -39,8 +39,13 @@ export class GatedArticleSource implements ArticleSource {
 
   release(messageId: string): void {
     this.#held.delete(messageId);
-    const ready = this.#pending.filter((entry) => entry.messageId === messageId);
+    const ready: Pending[] = [];
+    const remaining: Pending[] = [];
+    for (const entry of this.#pending) {
+      (entry.messageId === messageId ? ready : remaining).push(entry);
+    }
     this.#pending.length = 0;
+    this.#pending.push(...remaining);
     for (const entry of ready) {
       void this.#settle(entry);
     }
