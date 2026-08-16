@@ -21,8 +21,10 @@ export interface Harness {
   readonly post: Post;
   readonly source: GatedArticleSource;
   readonly handle: NzbFileHandle;
+  readonly onCoverage: Mock<(segment: number) => void>;
   readonly onFatal: Mock<(error: FatalDownloadError) => void>;
   readonly onDrained: Mock<() => void>;
+  readonly onObserverError: Mock<(error: Error) => void>;
   close(): Promise<void>;
 }
 
@@ -41,17 +43,20 @@ export async function harnessFor(post: Post): Promise<Harness> {
   const fd = await open(join(dir, 'out.mp4'), 'w+');
   await fd.truncate(handle.size);
 
+  const onCoverage = vi.fn<(segment: number) => void>();
   const onFatal = vi.fn<(error: FatalDownloadError) => void>();
   const onDrained = vi.fn<() => void>();
+  const onObserverError = vi.fn<(error: Error) => void>();
   const download = new Download({
     handle,
     fd,
     coverage: new SegmentCoverage(handle.geometry.segmentCount),
     dead: new SegmentCoverage(handle.geometry.segmentCount),
     prefetch: 2,
-    onCoverage: () => {},
+    onCoverage,
     onDrained,
     onFatal,
+    onObserverError,
   });
 
   return {
@@ -59,8 +64,10 @@ export async function harnessFor(post: Post): Promise<Harness> {
     post,
     source,
     handle,
+    onCoverage,
     onFatal,
     onDrained,
+    onObserverError,
     close: async () => {
       await download.stop();
       await fd.close();

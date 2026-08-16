@@ -5,18 +5,16 @@ import type { SegmentCoverage } from '../coverage/coverage.ts';
 import { FatalDownloadError } from './errors.ts';
 import { SegmentFetcher } from './fetcher.ts';
 import { SegmentNotifier } from './notifier.ts';
+import { JobObservers, type ObserverOptions } from './observers.ts';
 
 export { FatalDownloadError };
 
-export interface DownloadOptions {
+export interface DownloadOptions extends ObserverOptions {
   readonly handle: NzbFileHandle;
   readonly fd: FileHandle;
   readonly coverage: SegmentCoverage;
   readonly dead: SegmentCoverage;
   readonly prefetch: number;
-  readonly onCoverage: (segment: number) => void;
-  readonly onDrained: () => void;
-  readonly onFatal: (error: FatalDownloadError) => void;
 }
 
 /**
@@ -55,7 +53,11 @@ export class Download {
     this.#lastSegmentSize = geometry.lastSegmentSize;
     this.#segmentCount = geometry.segmentCount;
 
-    this.#fetcher = new SegmentFetcher({ ...options, notifier: this.#notifier });
+    this.#fetcher = new SegmentFetcher({
+      ...options,
+      notifier: this.#notifier,
+      observers: new JobObservers(options),
+    });
   }
 
   get coverage(): SegmentCoverage {

@@ -3,6 +3,7 @@ import { NzbGeometryError, type NzbFileHandle } from '@chad3814/nzb';
 import type { SegmentCoverage } from '../coverage/coverage.ts';
 import { FatalDownloadError, NON_UNIFORM_GEOMETRY } from './errors.ts';
 import type { SegmentNotifier } from './notifier.ts';
+import type { JobObservers } from './observers.ts';
 import { RateMeter } from './rate.ts';
 import { writeSegment } from './writer.ts';
 
@@ -14,9 +15,8 @@ export interface FetcherOptions {
   /** Shared with the readers: notifying it is the only thing that wakes them. */
   readonly notifier: SegmentNotifier;
   readonly prefetch: number;
-  readonly onCoverage: (segment: number) => void;
-  readonly onDrained: () => void;
-  readonly onFatal: (error: FatalDownloadError) => void;
+  /** Wrapped, so a throwing callback cannot be mistaken for a failed article. */
+  readonly observers: JobObservers;
 }
 
 /**
@@ -32,9 +32,7 @@ export class SegmentFetcher {
   readonly #dead: SegmentCoverage;
   readonly #notifier: SegmentNotifier;
   readonly #prefetch: number;
-  readonly #onCoverage: (segment: number) => void;
-  readonly #onDrained: () => void;
-  readonly #onFatal: (error: FatalDownloadError) => void;
+  readonly #observers: JobObservers;
   readonly #retried = new Set<number>();
   readonly #rate = new RateMeter();
 
@@ -56,9 +54,7 @@ export class SegmentFetcher {
     this.#dead = options.dead;
     this.#notifier = options.notifier;
     this.#prefetch = Math.max(1, options.prefetch);
-    this.#onCoverage = options.onCoverage;
-    this.#onDrained = options.onDrained;
-    this.#onFatal = options.onFatal;
+    this.#observers = options.observers;
 
     const geometry = options.handle.geometry;
     this.#segmentSize = geometry.segmentSize;
@@ -177,7 +173,7 @@ export class SegmentFetcher {
         this.#coverage.add(segment);
         this.#retried.delete(segment);
         this.#rate.record(next.value.byteLength);
-        this.#onCoverage(segment);
+        this.#observers.covered(segment);
         this.#reportDrained();
         this.#notifier.notify(segment);
 
@@ -247,7 +243,7 @@ export class SegmentFetcher {
 
     this.#retried.delete(segment);
     this.#dead.add(segment);
-    this.#onCoverage(segment);
+    this.#observers.covered(segment);
     this.#reportDrained();
     this.#notifier.notify(segment);
     return this.#coverage.nextHoleExcluding(segment + 1, this.#dead);
@@ -266,13 +262,15 @@ export class SegmentFetcher {
       return;
     }
     this.#drained = true;
-    this.#onDrained();
+    this.#observers.drained();
   }
 
   #fail(error: FatalDownloadError): void {
     this.#stopped = true;
     this.#failure = error;
-    this.#onFatal(error);
+    // Guarded, so a throwing listener cannot skip the line below and leave
+    // every parked reader waiting on a download that has already died.
+    this.#observers.fatal(error);
     this.#notifier.rejectAll(error);
   }
 
