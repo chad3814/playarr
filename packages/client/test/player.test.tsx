@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { JobDto } from '@playarr/shared';
+import type { JobDto, ProgressEvent } from '@playarr/shared';
 import { Player } from '../src/views/Player.tsx';
 
 const job: JobDto = {
@@ -60,6 +60,46 @@ function stubNavigation(): {
       });
     },
   };
+}
+
+/**
+ * `useEventSource` constructs its own `EventSource` internally, so a test
+ * needs a way to reach the instance it creates in order to push a `message`
+ * frame through it. Swaps in a subclass of whatever `EventSource` is
+ * currently installed (the `StubEventSource` from `test/setup.ts`, which
+ * extends the real `EventTarget`) that records every instance built while
+ * it is active.
+ */
+function captureEventSources(): {
+  readonly instances: readonly EventTarget[];
+  readonly restore: () => void;
+} {
+  const instances: EventTarget[] = [];
+  const original = window.EventSource;
+  class CapturingEventSource extends original {
+    constructor(url: string | URL) {
+      super(url);
+      instances.push(this);
+    }
+  }
+  window.EventSource = CapturingEventSource;
+  return {
+    instances,
+    restore: () => {
+      window.EventSource = original;
+    },
+  };
+}
+
+function pushFrame(source: EventTarget, data: string): void {
+  source.dispatchEvent(new MessageEvent('message', { data }));
+}
+
+/** A real macrotask hop, for flushing before a negative assertion. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe('Player', () => {
@@ -122,5 +162,116 @@ describe('Player finished dialog actions', () => {
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith('job1'));
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+});
+
+function frame(overrides: Partial<ProgressEvent>): ProgressEvent {
+  return {
+    status: 'ready',
+    covered: [],
+    dead: [],
+    coveredBytes: 0,
+    size: job.selection!.size,
+    bytesPerSecond: 0,
+    ...overrides,
+  };
+}
+
+describe('Player live progress: receiving a frame', () => {
+  it('updates the coverage bar and stats from a pushed progress frame', async () => {
+    const capture = captureEventSources();
+    try {
+      render(<Player job={job} onExit={vi.fn()} onDeleted={vi.fn()} />);
+      await waitFor(() => expect(capture.instances).toHaveLength(1));
+
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
+
+      pushFrame(
+        capture.instances[0]!,
+        JSON.stringify(
+          frame({ covered: [[0, 4]], coveredBytes: 3_400, bytesPerSecond: 1_048_576 }),
+        ),
+      );
+
+      await waitFor(() =>
+        expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100'),
+      );
+      expect(await screen.findByText(/1\.00 MiB\/s/u)).toBeDefined();
+    } finally {
+      capture.restore();
+    }
+  });
+});
+
+describe('Player live progress: malformed frames', () => {
+  it('ignores a malformed frame without breaking the stream for the next one', async () => {
+    const capture = captureEventSources();
+    try {
+      render(<Player job={job} onExit={vi.fn()} onDeleted={vi.fn()} />);
+      await waitFor(() => expect(capture.instances).toHaveLength(1));
+      const source = capture.instances[0]!;
+
+      pushFrame(source, 'not valid json{');
+      pushFrame(source, JSON.stringify({ status: 'ready', covered: [], dead: [] }));
+      await flush();
+
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
+      expect(screen.getByTestId('video')).toBeDefined();
+
+      pushFrame(
+        source,
+        JSON.stringify(frame({ covered: [[0, 3]], coveredBytes: 3_000, bytesPerSecond: 524_288 })),
+      );
+
+      await waitFor(() =>
+        expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75'),
+      );
+    } finally {
+      capture.restore();
+    }
+  });
+});
+
+describe('Player live progress: sequential frames', () => {
+  it('replaces the previous frame rather than blending with it', async () => {
+    const capture = captureEventSources();
+    try {
+      render(<Player job={job} onExit={vi.fn()} onDeleted={vi.fn()} />);
+      await waitFor(() => expect(capture.instances).toHaveLength(1));
+      const source = capture.instances[0]!;
+
+      pushFrame(
+        source,
+        JSON.stringify(
+          frame({ covered: [[0, 4]], coveredBytes: 3_400, bytesPerSecond: 1_048_576 }),
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100'),
+      );
+      expect(screen.queryByTestId('dead-3')).toBeNull();
+
+      pushFrame(
+        source,
+        JSON.stringify(
+          frame({
+            status: 'completing',
+            covered: [[0, 2]],
+            dead: [3],
+            coveredBytes: 2_000,
+            bytesPerSecond: 2_097_152,
+          }),
+        ),
+      );
+
+      await waitFor(() =>
+        expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50'),
+      );
+      expect(await screen.findByTestId('dead-3')).toBeDefined();
+      expect(await screen.findByText(/2\.00 MiB\/s/u)).toBeDefined();
+      expect(await screen.findByText(/completing/iu)).toBeDefined();
+    } finally {
+      capture.restore();
+    }
   });
 });
