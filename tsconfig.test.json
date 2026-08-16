@@ -6,5 +6,10 @@
     "declarationMap": false,
     "noEmit": true
   },
-  "include": ["vitest.config.ts", "packages/server/test/**/*.ts", "packages/shared/test/**/*.ts"]
+  "include": [
+    "vitest.config.ts",
+    "packages/server/test/**/*.ts",
+    "packages/shared/test/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }
