@@ -8,6 +8,7 @@ import { deriveCandidates } from './jobs/candidates.ts';
 import type { JobManager } from './jobs/manager.ts';
 import type { JobRecord, JobStore } from './jobs/store.ts';
 import type { PoolManager } from './nntp/pool.ts';
+import { registerDeliveryRoutes } from './routes/delivery.ts';
 import { registerJobRoutes } from './routes/jobs.ts';
 import { registerSelectRoutes } from './routes/select.ts';
 import { registerStreamRoutes } from './routes/stream.ts';
@@ -93,6 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(registerJobRoutes, { deps, prefix: '/api' });
   await app.register(registerSelectRoutes, { deps, prefix: '/api' });
   await app.register(registerStreamRoutes, { deps, prefix: '/api' });
+  await app.register(registerDeliveryRoutes, { deps, prefix: '/api' });
 
   if (deps.clientDir !== undefined) {
     await app.register(fastifyStatic, { root: deps.clientDir });
