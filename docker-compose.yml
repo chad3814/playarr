@@ -2,7 +2,14 @@ services:
   playarr:
     build: .
     ports:
-      - '8080:8080'
+      # Bound to the loopback interface deliberately. playarr has no
+      # authentication of any kind, so anyone who can reach this port can read
+      # and overwrite your provider settings, upload NZBs, delete jobs, and
+      # make the server open a connection to any host:port it is told to via
+      # POST /settings/test. Publishing it as '8080:8080' offers all of that to
+      # everything on your LAN. Put it behind something that authenticates
+      # before you widen this.
+      - '127.0.0.1:8080:8080'
     volumes:
       - playarr-data:/data
     environment:

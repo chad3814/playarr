@@ -14,27 +14,81 @@ Then open `http://localhost:8080`. Job state and (optionally) your NNTP
 password live in a named volume (`playarr-data`), so they survive a
 container restart.
 
+## There is no authentication
+
+None. Not a password, not a token, not a session. Anyone who can reach the
+port can read and overwrite your provider settings, upload NZBs, delete jobs,
+and make the server open a connection to any host and port they name (`POST
+/api/settings/test`). This is a deliberate scope decision for a single-user
+tool on a trusted machine, not something half-built.
+
+So `docker-compose.yml` publishes the port as `127.0.0.1:8080:8080` — reachable
+from the machine running the container and nowhere else. **Do not change that
+to `8080:8080`** (or any other interface) unless you have put a reverse proxy
+that authenticates in front of it. The server itself binds `0.0.0.0` inside
+the container, which it has to; the publish rule is what keeps it private.
+
 ## Configuring your Usenet provider
 
-There are two ways to give playarr your NNTP host and credentials:
+The host and connection settings come from environment variables first, and
+fall back to whatever the settings page saved. Credentials are resolved
+separately, and each one is tried in this order:
 
-- **Environment variables** (`NNTP_HOST`, `NNTP_PORT`, `NNTP_SECURITY`,
-  `NNTP_CONNECTIONS`, `NNTP_USERNAME`, `NNTP_PASSWORD`), set in
-  `docker-compose.yml` or the shell that runs it. **This is the better
-  option** — the password never touches disk inside the container.
-- **The settings page in the UI.** This is simpler but writes your password
-  in plaintext to `/data/config.json` (mode `0600`, but plaintext all the
-  same) on the named volume. Anyone with access to that volume can read it.
+1. **`NNTP_USERNAME` / `NNTP_PASSWORD` environment variables**, set in
+   `docker-compose.yml` or the shell that runs it. Simple, and the password
+   never touches disk inside the container — but it is visible to anything
+   that can read the container's environment (`docker inspect`, `/proc`).
+2. **Secret files at `/run/secret/nntp_username` and
+   `/run/secret/nntp_password`.** **This is the most secure option.** Mount
+   them read-only and the credential is never in the environment, never in
+   `docker inspect`, and never on the data volume:
 
-If both are set, the environment wins.
+   ```yaml
+   services:
+     playarr:
+       secrets:
+         - source: nntp_password
+           target: /run/secret/nntp_password
+           mode: 0400
+
+   secrets:
+     nntp_password:
+       file: ./nntp_password.txt # a trailing newline is trimmed off for you
+   ```
+
+   The username file works the same way, and either file can be used without
+   the other.
+
+3. **The settings page in the UI.** Simplest, but it writes your password in
+   plaintext to `/data/config.json` (mode `0600`, but plaintext all the same)
+   on the named volume. Anyone with access to that volume can read it.
+
+The other provider settings — `NNTP_HOST`, `NNTP_PORT`, `NNTP_SECURITY`,
+`NNTP_CONNECTIONS` — are environment variables or the settings page, and the
+environment wins.
+
+## Other environment variables
+
+| Variable             | Default          | What it does                                                            |
+| -------------------- | ---------------- | ----------------------------------------------------------------------- |
+| `PORT`               | `8080`           | Port the server listens on inside the container.                        |
+| `HOST`               | `0.0.0.0`        | Interface it binds. Leave it: the compose publish rule is the boundary. |
+| `PLAYARR_DATA_DIR`   | `/data`          | Where jobs, their sparse files, and `config.json` live.                 |
+| `PLAYARR_CLIENT_DIR` | set by the image | Static client bundle to serve. Unset outside the container.             |
+
+A blank value is treated the same as an unset one, so compose interpolating
+`${PORT:-}` into an empty string does not override the default.
 
 ## What it does not do (on purpose)
 
 These are design decisions, not bugs:
 
-- **MP4 only.** Playback only works for a browser-playable container/codec
-  combination; other files in the NZB can be selected but won't stream. No
-  transcoding happens anywhere in this project.
+- **MP4 only.** Choosing a file whose name turns out not to end in `.mp4` is
+  refused outright (HTTP 415), and non-MP4 files are not offered in the file
+  list at all — except when no filename in the NZB could be resolved without
+  fetching, in which case every file is offered and the check happens once the
+  real name is known. Playback still depends on the container holding a
+  browser-playable codec; no transcoding happens anywhere in this project.
 - **Playback can stall.** If your Usenet connection's throughput is lower
   than the video's bitrate, the browser will buffer and wait — same as any
   slow connection to any video source. This is expected, not a hang.
