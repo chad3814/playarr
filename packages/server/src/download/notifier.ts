@@ -22,6 +22,18 @@ export class SegmentNotifier {
     return total;
   }
 
+  /**
+   * Every segment a reader is currently parked on.
+   *
+   * This is the fetcher's demand, and the reason it needs no second copy of
+   * it: an entry appears when a reader parks and disappears when the segment
+   * lands, the reader aborts, or the download dies, so the map cannot drift
+   * from the set of readers actually waiting.
+   */
+  segments(): number[] {
+    return [...this.#waiters.keys()];
+  }
+
   wait(segment: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted === true) {
       return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));

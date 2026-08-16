@@ -38,6 +38,37 @@ describe('SegmentNotifier notify', () => {
   });
 });
 
+describe('SegmentNotifier segments', () => {
+  it('reports exactly the segments a reader is parked on', async () => {
+    const notifier = new SegmentNotifier();
+    expect(notifier.segments()).toEqual([]);
+
+    const waiting = Promise.all([notifier.wait(5), notifier.wait(2), notifier.wait(5)]);
+    expect(notifier.segments().toSorted((a, b) => a - b)).toEqual([2, 5]);
+
+    notifier.notify(5);
+    expect(notifier.segments()).toEqual([2]);
+    notifier.notify(2);
+    expect(notifier.segments()).toEqual([]);
+    await waiting;
+  });
+
+  it('drops a segment as soon as its last waiter aborts', async () => {
+    const notifier = new SegmentNotifier();
+    const controller = new AbortController();
+    const staying = notifier.wait(9);
+    const going = notifier.wait(9, controller.signal);
+
+    controller.abort();
+    await expect(going).rejects.toThrow(/abort/iu);
+    expect(notifier.segments()).toEqual([9]);
+
+    notifier.notify(9);
+    await staying;
+    expect(notifier.segments()).toEqual([]);
+  });
+});
+
 describe('SegmentNotifier failure', () => {
   it('rejects a waiter when its signal aborts, and deregisters it', async () => {
     const notifier = new SegmentNotifier();
