@@ -3,12 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import './styles.css';
 
-const container = document.querySelector('#root');
-if (container === null) {
-  throw new Error('missing #root element');
+const root = document.querySelector('#root');
+if (root === null) {
+  throw new Error('no #root element');
 }
-
-createRoot(container).render(
+createRoot(root).render(
   <StrictMode>
     <App />
   </StrictMode>,
