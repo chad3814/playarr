@@ -12,7 +12,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run build --workspace @playarr/client",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "lint": "oxlint --deny-warnings",
     "format": "prettier --write .",

@@ -10,6 +10,15 @@ export default defineConfig({
           include: ['packages/server/test/**/*.test.ts', 'packages/shared/test/**/*.test.ts'],
         },
       },
+      {
+        test: {
+          name: 'client',
+          environment: 'jsdom',
+          globals: true,
+          include: ['packages/client/test/**/*.test.tsx', 'packages/client/test/**/*.test.ts'],
+          setupFiles: ['packages/client/test/setup.ts'],
+        },
+      },
     ],
   },
 });

@@ -4,5 +4,5 @@
     "typescript/no-explicit-any": "error",
     "eslint/max-classes-per-file": ["error", 2]
   },
-  "ignorePatterns": ["dist", "node_modules", "packages/client/dist"]
+  "ignorePatterns": ["dist", "node_modules", "packages/client/dist", "packages/client/dist-types"]
 }
