@@ -28,8 +28,17 @@ export function asError(reason: unknown): Error {
   return reason instanceof Error ? reason : new Error(String(reason));
 }
 
-/** A `JobErrorReporter` that logs through `logger`, tagged with `context`. */
-export function reportToLogger(logger: FastifyBaseLogger, context: string): JobErrorReporter {
+/**
+ * A `JobErrorReporter` that logs through `logger`, tagged with `context`.
+ *
+ * Takes only the `error` method, not the full `FastifyBaseLogger` — the one
+ * thing this ever calls — so a test can hand it a fake without building a
+ * whole logger.
+ */
+export function reportToLogger(
+  logger: Pick<FastifyBaseLogger, 'error'>,
+  context: string,
+): JobErrorReporter {
   return (jobId, error) => {
     logger.error({ jobId, err: error }, context);
   };

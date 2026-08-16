@@ -34,6 +34,15 @@ export interface ShutdownDeps {
  * non-zero exit code carries the failure to whatever is supervising this
  * process. Blocking any longer here cannot recover a write that has already
  * failed, so the rest of shutdown still runs.
+ *
+ * Only `dispose()` is guarded this way. `releaseAll()`, `destroy()`, and
+ * `close()` below have no equivalent handling: a rejection from any of them
+ * still reaches the bare `.then()` around this call in index.ts as an
+ * unhandled rejection. That asymmetry is current, not an oversight left for
+ * later — `dispose()` is guarded because it is the one call whose failure
+ * mode (a job's final state silently not reaching disk) this task was asked
+ * to make a deliberate decision about; the other three have no such decision
+ * recorded yet.
  */
 export async function shutdown(deps: ShutdownDeps): Promise<void> {
   await deps.manager.releaseAll();
