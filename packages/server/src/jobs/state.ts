@@ -1,149 +1,26 @@
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { JobFailure, JobStatus, SegmentRun } from '@playarr/shared';
+import { JobStateError, parseJobState, STATE_FILENAME, type JobState } from './state-parse.ts';
 
-export const STATE_FILENAME = 'state.json';
-
-const STATUSES: readonly JobStatus[] = [
-  'uploaded',
-  'ready',
-  'paused',
-  'completing',
-  'complete',
-  'failed',
-];
-
-export interface JobGeometry {
-  readonly segmentSize: number;
-  readonly lastSegmentSize: number;
-  readonly segmentCount: number;
-}
-
-export interface JobSelection {
-  readonly fileIndex: number;
-  readonly name: string;
-  readonly size: number;
-  readonly geometry: JobGeometry;
-  readonly covered: readonly SegmentRun[];
-  readonly dead: readonly number[];
-}
-
-export interface JobState {
-  readonly id: string;
-  readonly createdAt: string;
-  readonly nzbName: string;
-  readonly status: JobStatus;
-  readonly failure?: JobFailure;
-  readonly selection?: JobSelection;
-}
-
-export class JobStateError extends Error {
-  readonly code: 'corrupt' | 'missing';
-
-  constructor(code: 'corrupt' | 'missing', message: string) {
-    super(message);
-    this.name = 'JobStateError';
-    this.code = code;
-  }
-}
-
-type Json = Record<string, unknown>;
-
-function corrupt(message: string): never {
-  throw new JobStateError('corrupt', message);
-}
-
-function object(value: unknown, field: string): Json {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    corrupt(`${field} must be an object`);
-  }
-  return value as Json;
-}
-
-function string(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    corrupt(`${field} must be a non-empty string`);
-  }
-  return value;
-}
-
-function integer(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-    corrupt(`${field} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function status(value: unknown): JobStatus {
-  const found = STATUSES.find((candidate) => candidate === value);
-  if (found === undefined) {
-    corrupt(`status must be one of ${STATUSES.join(', ')}`);
-  }
-  return found;
-}
-
-function runs(value: unknown, field: string): SegmentRun[] {
-  if (!Array.isArray(value)) {
-    corrupt(`${field} must be an array`);
-  }
-  return value.map((entry, index) => {
-    if (!Array.isArray(entry) || entry.length !== 2) {
-      corrupt(`${field}[${index}] must be a [start, end) pair`);
-    }
-    return [integer(entry[0], `${field}[${index}][0]`), integer(entry[1], `${field}[${index}][1]`)];
-  });
-}
-
-function geometry(value: unknown): JobGeometry {
-  const raw = object(value, 'selection.geometry');
-  return {
-    segmentSize: integer(raw['segmentSize'], 'selection.geometry.segmentSize'),
-    lastSegmentSize: integer(raw['lastSegmentSize'], 'selection.geometry.lastSegmentSize'),
-    segmentCount: integer(raw['segmentCount'], 'selection.geometry.segmentCount'),
-  };
-}
-
-function selection(value: unknown): JobSelection {
-  const raw = object(value, 'selection');
-  return {
-    fileIndex: integer(raw['fileIndex'], 'selection.fileIndex'),
-    name: string(raw['name'], 'selection.name'),
-    size: integer(raw['size'], 'selection.size'),
-    geometry: geometry(raw['geometry']),
-    covered: runs(raw['covered'], 'selection.covered'),
-    dead: Array.isArray(raw['dead'])
-      ? raw['dead'].map((entry, index) => integer(entry, `selection.dead[${index}]`))
-      : corrupt('selection.dead must be an array'),
-  };
-}
-
-function failure(value: unknown): JobFailure {
-  const raw = object(value, 'failure');
-  return {
-    code: string(raw['code'], 'failure.code'),
-    message: string(raw['message'], 'failure.message'),
-  };
-}
-
-export function parseJobState(text: string): JobState {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(text);
-  } catch (error) {
-    corrupt(`state.json is not valid JSON: ${(error as Error).message}`);
-  }
-
-  const raw = object(decoded, 'state');
-  const state: JobState = {
-    id: string(raw['id'], 'id'),
-    createdAt: string(raw['createdAt'], 'createdAt'),
-    nzbName: string(raw['nzbName'], 'nzbName'),
-    status: status(raw['status']),
-    ...(raw['failure'] === undefined ? {} : { failure: failure(raw['failure']) }),
-    ...(raw['selection'] === undefined ? {} : { selection: selection(raw['selection']) }),
-  };
-  return state;
-}
+/**
+ * The whole of a job's persisted state lives behind this module: reading and
+ * validating it (`./state-parse.ts`), writing it, and coalescing those writes.
+ *
+ * Split only because the reading half and the writing half had grown to fill
+ * one file's line budget between them, which left the most delicate code in
+ * the project with no room for its next change. The seam is deliberate rather
+ * than arbitrary — parsing is pure and total, writing is stateful and
+ * concurrent — but every importer still goes through `state.ts`, so nothing
+ * outside has to know the split happened.
+ */
+export {
+  JobStateError,
+  parseJobState,
+  STATE_FILENAME,
+  type JobGeometry,
+  type JobSelection,
+  type JobState,
+} from './state-parse.ts';
 
 export async function readJobState(dir: string): Promise<JobState> {
   let text: string;
@@ -228,8 +105,24 @@ export class JobStateWriter {
    * when its write was the most recent take, so the second pass has at most
    * one state to write. A `schedule()` from outside during the flush is
    * deliberately not covered — the debounce may take it and write it after
-   * this returns. `flush()` promises to land everything scheduled before it
-   * was called, not everything scheduled while it runs.
+   * this returns.
+   *
+   * Two things this does *not* promise, both of which need a second caller to
+   * observe:
+   *
+   * - It assumes it is the only flush in progress. Two concurrent `flush()`
+   *   calls both awaiting a failing timer write will both be released by its
+   *   catch handler; the first re-check takes the restored state and writes
+   *   it, and the second then finds `#pending` null and returns — resolving
+   *   while the write that carries its own state is still in flight.
+   * - Each pass awaits the `#inFlight` it read, not whatever `#inFlight`
+   *   became afterwards, so a write chained on by someone else mid-flush is
+   *   likewise not waited for.
+   *
+   * `JobStore` never has two flushes outstanding for one job today — `update`
+   * and `dispose` are both awaited by their callers — so this is a limit of
+   * the contract rather than a live defect. Anything that starts flushing one
+   * writer from two places at once needs a lock here first.
    */
   async flush(): Promise<void> {
     await this.#flushOnce();
@@ -290,6 +183,19 @@ export class JobStateWriter {
         // route: a `schedule()` leaves the newer state in `#pending`, while a
         // `flush()` that took one left `#pending` null but moved `#taken` on.
         // Restoring past a newer take would write this state over its successor.
+        //
+        // Both halves are load-bearing, and no single test covers the pair:
+        //   - state.test.ts, 'JobStateWriter - retries a failed timer-driven
+        //     write' and 'JobStateWriter - onError defaults' pin that a lone
+        //     failure *does* restore and re-arm. Drop the restore and the
+        //     state is lost.
+        //   - state.test.ts, 'JobStateWriter - supersession of a failed retry'
+        //     pins `#pending === null`: a newer state scheduled while this
+        //     write hung must not be overwritten by it.
+        //   - shutdown-durability.test.ts, 'JobStateWriter.flush - a superseded
+        //     state must never be written last' pins `#taken === taken`: a
+        //     newer state *taken by a flush* leaves `#pending` null too, so
+        //     `#pending` alone cannot tell that case from "nothing happened".
         if (this.#pending === null && this.#taken === taken) {
           this.#pending = state;
           this.#arm();
