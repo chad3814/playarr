@@ -1,4 +1,6 @@
+import { rename } from 'node:fs/promises';
 import { get as httpGet } from 'node:http';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadConflict, JobDto } from '@playarr/shared';
 import { closeFixture, fixture, SEG, type Fixture } from './app-fixture.ts';
@@ -18,6 +20,9 @@ async function selected(): Promise<Fixture> {
 afterEach(async () => {
   await closeFixture(current);
   current = null;
+  // One of these spies is on `globalThis.clearInterval`, which outlives the
+  // fixture and every other test in this file.
+  vi.restoreAllMocks();
 });
 
 describe('GET /api/jobs/:id/download', () => {
@@ -39,8 +44,35 @@ describe('GET /api/jobs/:id/download', () => {
 
     const response = await f.app.inject({ method: 'GET', url: `/api/jobs/${f.jobId}/download` });
     expect(response.statusCode).toBe(200);
-    expect(response.headers['content-disposition']).toBe('attachment; filename="Some.Film.mp4"');
+    expect(response.headers['content-disposition']).toBe(
+      'attachment; filename="Some.Film.mp4"; filename*=UTF-8\'\'Some.Film.mp4',
+    );
     expect(Number(response.headers['content-length'])).toBe(3 * SEG + 400);
+    expect(Buffer.from(response.rawPayload).equals(f.post.data)).toBe(true);
+  });
+});
+
+describe('GET /api/jobs/:id/download - a selection name off the volume', () => {
+  it('serves a name holding a newline instead of 500ing on the header', async () => {
+    const f = await selected();
+    expect(
+      (await f.app.inject({ method: 'POST', url: `/api/jobs/${f.jobId}/complete` })).statusCode,
+    ).toBe(200);
+
+    // A yEnc `name=` can hold anything, and state.json is hand-editable. A raw
+    // CR or LF in a quoted-string terminates the header line, which Node
+    // refuses to emit -- a 500 on a file that is entirely fine.
+    const record = f.store.get(f.jobId)!;
+    const hostile = 'Some.\r\nFilm.mp4';
+    await rename(join(record.dir, 'Some.Film.mp4'), join(record.dir, hostile));
+    record.state = { ...record.state, selection: { ...record.state.selection!, name: hostile } };
+
+    const response = await f.app.inject({ method: 'GET', url: `/api/jobs/${f.jobId}/download` });
+
+    expect(response.statusCode).toBe(200);
+    const disposition = String(response.headers['content-disposition']);
+    expect(disposition).not.toMatch(/[\r\n]/u);
+    expect(disposition).toContain("filename*=UTF-8''Some.%0D%0AFilm.mp4");
     expect(Buffer.from(response.rawPayload).equals(f.post.data)).toBe(true);
   });
 });
@@ -152,6 +184,7 @@ describe('GET /api/jobs/:id/events - a real, disconnecting socket', () => {
     const f = await selected();
     const address = await f.app.listen({ port: 0, host: '127.0.0.1' });
     const getSpy = vi.spyOn(f.store, 'get');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
 
     const destroyClient = await new Promise<() => void>((resolve, reject) => {
       const req = httpGet(`${address}/api/jobs/${f.jobId}/events`, (res) => {
@@ -166,13 +199,21 @@ describe('GET /api/jobs/:id/events - a real, disconnecting socket', () => {
     });
 
     const callsBeforeDisconnect = getSpy.mock.calls.length;
+    clearSpy.mockClear();
     destroyClient();
 
-    // The interval ticks every 500ms; waiting past one full period with no
-    // growth in `store.get` calls is the only way to show it was actually
-    // cleared rather than merely not yet due.
+    // The route clears its ticker from the request's own 'close' handler, so
+    // waiting for the call *is* waiting for the disconnect to have been
+    // processed. Sleeping past one 500ms period instead only proved the same
+    // thing by guessing how long that takes, and paid 800ms of wall clock for
+    // the guess on every run.
+    await vi.waitFor(() => {
+      expect(clearSpy).toHaveBeenCalled();
+    });
+    // A whole turn before the negative assertion, so a tick already queued
+    // would have had its chance to run.
     await new Promise((resolve) => {
-      setTimeout(resolve, 800);
+      setImmediate(resolve);
     });
     expect(getSpy.mock.calls.length).toBe(callsBeforeDisconnect);
   });

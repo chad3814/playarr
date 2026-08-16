@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobStore, type JobRecord } from '../src/jobs/store.ts';
 import { readJobState } from '../src/jobs/state.ts';
 
@@ -55,6 +55,23 @@ function withSelection(store: JobStore, id: string, name: string): JobRecord {
   };
   return record;
 }
+
+// Three tests here queue a mockImplementationOnce. With no reset between
+// them, one its own test failed to consume survives and is spent by the wrong
+// write in a later test -- a rejection appearing in a test that never asked
+// for one, which reads as a flake rather than as leakage. mockClear() does not
+// help: it wipes call history and leaves the queue. mockReset() drains it.
+//
+// The passthrough is re-supplied explicitly rather than relying on Vitest 4's
+// mockReset() restoring the vi.fn() constructor argument, which is a nuance
+// that has already changed once across Vitest majors and which every success
+// path in this file depends on.
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const mocked = vi.mocked(writeFile);
+  mocked.mockReset();
+  mocked.mockImplementation(actual.writeFile);
+});
 
 afterEach(() => {
   vi.useRealTimers();

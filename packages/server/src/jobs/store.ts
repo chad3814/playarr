@@ -222,8 +222,14 @@ export class JobStore {
       const reason = error instanceof JobStateError ? error.message : String(error);
       return {
         id: name,
+        // Nothing about this job is known: state.json is what carried the
+        // upload's name and time, and state.json is the file that cannot be
+        // read. The epoch is a placeholder no real job can hold, and the
+        // directory name is at least true -- `NZB_FILENAME` here rendered in
+        // the UI as a plausible upload called "source.nzb", which is a claim
+        // this record has no basis for making.
         createdAt: new Date(0).toISOString(),
-        nzbName: NZB_FILENAME,
+        nzbName: name,
         status: 'failed',
         failure: {
           code: 'corrupt-state',

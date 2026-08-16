@@ -99,6 +99,20 @@ describe('parsing a dropped NZB', () => {
 });
 
 describe('after parsing', () => {
+  it('reports a file it cannot even read, rather than rejecting into nothing', async () => {
+    const upload = vi.fn();
+    renderLibrary({ uploadNzb: upload });
+    const unreadable = nzbFile();
+    vi.spyOn(unreadable, 'text').mockRejectedValue(new Error('NotReadableError'));
+
+    await userEvent.upload(screen.getByLabelText(/nzb file/iu), unreadable);
+
+    // The drop handler discards this promise with `void`, so a read that
+    // rejects outside the try is an unhandled rejection and a blank screen.
+    expect(await screen.findByRole('alert')).toBeDefined();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
   it('reports a malformed NZB without calling the server', async () => {
     const upload = vi.fn();
     renderLibrary({ uploadNzb: upload });

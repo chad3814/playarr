@@ -59,9 +59,13 @@ function useAccept(uploadNzb: Props['uploadNzb']): AcceptState {
   const accept = useCallback(
     async (file: File) => {
       setError(null);
-      const xml = await file.text();
       try {
-        const parsed = localCandidates(xml);
+        // Inside the try, not before it: the call site discards this promise
+        // with `void`, so a file that cannot be read -- a directory dropped on
+        // the zone, a file revoked between the drop and the read -- would be
+        // an unhandled rejection and nothing on screen, rather than the error
+        // line every other failure here produces.
+        const parsed = localCandidates(await file.text());
         setEntries(parsed.entries);
         setUnresolved(parsed.namesUnresolved);
       } catch (parseError) {
@@ -135,6 +139,11 @@ function useLibrary(
   return { entries, unresolved, error, busy, accept, play };
 }
 
+interface JobButtonProps {
+  readonly job: JobDto;
+  readonly onPlay: Props['onPlay'];
+}
+
 /**
  * A job with no selection has nothing to play, and file 0 is not a guess worth
  * making: it is whichever file happened to come first in the NZB, and choosing
@@ -142,11 +151,6 @@ function useLibrary(
  * the persisted coverage reset. The only way to choose a file is to drop the
  * NZB again and pick one from the list, so the button is offered dead.
  */
-interface JobButtonProps {
-  readonly job: JobDto;
-  readonly onPlay: Props['onPlay'];
-}
-
 function JobButton({ job, onPlay }: JobButtonProps): JSX.Element {
   const selection = job.selection;
   if (selection === undefined) {

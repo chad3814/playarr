@@ -85,6 +85,10 @@ describe('JobStore.scan - corrupt state', () => {
 
     expect(store.get(name)?.state.status).toBe('failed');
     expect(store.get(name)?.state.failure?.code).toBe('corrupt-state');
+    // Nothing here knows what the upload was called, so it must not invent
+    // one: 'source.nzb' is the name of the file on disk, and rendering it as
+    // the job's title claims metadata this record does not have.
+    expect(store.get(name)?.state.nzbName).toBe(name);
     await store.dispose();
   });
 });

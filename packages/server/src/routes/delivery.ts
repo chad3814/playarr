@@ -130,6 +130,21 @@ async function abandonCompletion(store: JobStore, request: CompleteRequest): Pro
  * back off the volume (state.json), which is the one place a hand-edited
  * state could aim a read outside the job directory.
  */
+/**
+ * RFC 6266 `attachment` for a name that came back off the volume.
+ *
+ * A quoted-string cannot carry a control character: a CR or LF in a yEnc name
+ * would terminate the header line, which Node refuses to emit at all — so
+ * stripping only `"` left a name with a newline in it producing a 500 on a
+ * file that is perfectly fine. The quoted form is therefore reduced to what a
+ * quoted-string may actually hold, and `filename*` carries the real name
+ * percent-encoded, which is what a browser prefers anyway.
+ */
+function contentDisposition(name: string): string {
+  const quotable = name.replaceAll(/["\\\p{Cc}]/gu, '');
+  return `attachment; filename="${quotable}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 function downloadJob(store: JobStore, id: string, reply: FastifyReply): FastifyReply {
   const { record, selection } = selected(store, id);
 
@@ -138,11 +153,16 @@ function downloadJob(store: JobStore, id: string, reply: FastifyReply): FastifyR
     return reply.code(409).send(conflict);
   }
 
+  // Resolved before a single header is set. `outputPath` throws for a name
+  // state.json should never have held, and headers already written into the
+  // reply survive onto the 500 that throw produces.
+  const path = store.outputPath(record);
+
   return reply
     .header('content-type', 'video/mp4')
     .header('content-length', String(selection.size))
-    .header('content-disposition', `attachment; filename="${selection.name.replaceAll('"', '')}"`)
-    .send(createReadStream(store.outputPath(record)));
+    .header('content-disposition', contentDisposition(selection.name))
+    .send(createReadStream(path));
 }
 
 type EventsRequest = FastifyRequest<{ Params: { id: string }; Querystring: { once?: string } }>;
