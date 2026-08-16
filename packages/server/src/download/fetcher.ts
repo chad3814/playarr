@@ -198,8 +198,7 @@ export class SegmentFetcher {
   /**
    * One past the last segment this pass should ask for. The handle prefetches
    * ahead of what the pass consumes, so a pass allowed to run to the end of the
-   * file pays for articles covering bytes already on disk; stopping at the end
-   * of the anchor's run of holes is what makes a seek cost only the holes.
+   * file pays for articles covering bytes already on disk.
    */
   #holeEnd(anchor: number): number {
     const boundary = (known: SegmentCoverage): number =>

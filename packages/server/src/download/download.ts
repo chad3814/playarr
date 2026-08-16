@@ -92,8 +92,15 @@ export class Download {
    * Fetch the first and last segments.
    *
    * An MP4's `moov` atom sits at the front on a faststart encode and at the
-   * back on most remuxes, and the NZB cannot say which. Segment 1 was already
-   * paid for by `openNzbFile` and is cached, so this usually costs one article.
+   * back on most remuxes, and the NZB cannot say which.
+   *
+   * Not cheap, and worth knowing before this is called on a hot path. Segment
+   * 1 is cached from `openNzbFile`, but the head pass starts articles beyond
+   * it before it can see the first one and act on the seek to the tail — the
+   * handle's prefetch window, plus the one started as that first article is
+   * consumed — and every one of those is abandoned. On the five-segment test
+   * fixture, with a prefetch of two, priming two segments costs four articles.
+   * `Download.prime cost` in `download.test.ts` pins the number.
    */
   async prime(): Promise<void> {
     this.want(0);

@@ -21,13 +21,20 @@ export interface ObserverOptions {
  * failed article.
  *
  * The fetcher runs these from inside the same `try` that catches article
- * errors, and unguarded that is actively destructive rather than merely
- * untidy: a throwing `onCoverage` is recovered from as though the *article*
- * had failed, so the segment is re-requested despite already being on disk,
- * and on the second throw a good, fully written segment is added to the dead
- * set. Nothing here is made fatal, because the bytes reached the descriptor
- * either way and coverage is cumulative — the next segment to land re-states
- * everything the dropped call would have said.
+ * errors, so unguarded they do not merely lose their message. Each one is
+ * immediately followed by the `notify`/`rejectAll` that wakes readers, and a
+ * throw skips it: readers park forever on bytes that are already on disk. On
+ * the dead-segment path and in the fetcher's `#fail` the throw escapes it
+ * entirely, killing the fetcher as an unhandled rejection.
+ *
+ * What this does *not* do is stop a good segment being marked dead. The
+ * fetcher's recovery would re-anchor at the segment it thinks failed, and it
+ * is `#run`'s `nextHoleExcluding` normalisation that skips it — the segment is
+ * covered by then. That protection lives at `fetcher.ts`, not here.
+ *
+ * Nothing here is made fatal: the bytes reached the descriptor either way, and
+ * coverage is cumulative, so the next segment to land re-states everything the
+ * dropped call would have said.
  */
 export class JobObservers {
   readonly #options: ObserverOptions;

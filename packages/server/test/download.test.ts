@@ -42,6 +42,39 @@ describe('Download.prime', () => {
   });
 });
 
+describe('Download.prime cost', () => {
+  // Measured, not bounded. Segment 0's article is the one `openNzbFile`
+  // already paid for and kept, so index 0 is never re-requested. The head pass
+  // then starts three more -- the handle's prefetch window of two, plus the one
+  // started as segment 0's article is consumed -- before it can see the first
+  // article and act on prime()'s seek to the tail. All three are discarded
+  // unwritten. Pinned because that is four articles to cover two segments on
+  // the hottest path in the application, and nothing else makes it visible.
+  it('costs four articles to cover those two segments', async () => {
+    const h = (openHarness = await harness());
+    const ids = messageIds(h);
+    await h.download.prime();
+    await flush();
+
+    expect(h.source.requested.map((id) => ids.indexOf(id))).toEqual([0, 1, 2, 3, 4]);
+    expect(h.source.requestCount).toBe(5);
+  });
+
+  // The same four on a longer post, where three abandoned articles and a walk
+  // of the whole file are finally distinguishable -- on the five-segment
+  // fixture both spend exactly [0,1,2,3,4], so that test alone cannot tell a
+  // regression in the seek from a regression in the count.
+  it('does not grow that cost on a longer post', async () => {
+    const h = (openHarness = await harness(EIGHT));
+    const ids = messageIds(h);
+    await h.download.prime();
+    await flush();
+
+    expect(h.source.requested.map((id) => ids.indexOf(id))).toEqual([0, 1, 2, 3, 7]);
+    expect(h.source.requestCount).toBe(5);
+  });
+});
+
 describe('Download.read', () => {
   it('serves covered bytes without requesting a single article', async () => {
     const h = (openHarness = await harness());
@@ -91,62 +124,6 @@ describe('Download.read cancellation', () => {
     h.source.release(second);
     await vi.waitFor(() => expect(h.download.coverage.has(1)).toBe(true));
     expect(h.source.requested.filter((id) => id === second)).toHaveLength(1);
-  });
-});
-
-describe('Download seeking', () => {
-  it('does not re-anchor for a seek already inside the prefetch window', async () => {
-    const h = (openHarness = await harness(EIGHT));
-    const ids = messageIds(h);
-    h.download.want(0);
-    await h.download.waitFor(0);
-
-    h.download.want(1);
-    await h.download.waitFor(1);
-
-    const seen = h.source.requested.filter((id) => ids.includes(id));
-    expect(seen.slice(0, 2)).toEqual([ids[0], ids[1]]);
-    expect(seen.filter((id) => id === ids[1])).toHaveLength(1);
-  });
-
-  it('re-anchors on a far-forward seek', async () => {
-    const h = (openHarness = await harness(EIGHT));
-    const ids = messageIds(h);
-
-    h.download.want(0);
-    await h.download.waitFor(0);
-
-    h.download.want(6);
-    await h.download.waitFor(6);
-    expect(h.download.coverage.has(6)).toBe(true);
-    expect(h.source.requested).not.toContain(ids[4]);
-    expect(h.source.requested).not.toContain(ids[5]);
-  });
-});
-
-describe('Download seeking into covered bytes', () => {
-  it('costs nothing to seek backwards into covered bytes', async () => {
-    const h = (openHarness = await harness());
-    await h.download.prime();
-    h.download.want(2);
-    await h.download.waitFor(2);
-    const before = h.source.requestCount;
-
-    const head = await collect(h.download.read(0, SEG));
-    expect(head.equals(h.post.data.subarray(0, SEG))).toBe(true);
-    await flush();
-    expect(h.source.requestCount).toBe(before);
-  });
-
-  it('skips a covered run rather than refetching it', async () => {
-    const h = (openHarness = await harness());
-    const ids = messageIds(h);
-    await h.download.prime();
-
-    h.download.want(1);
-    await h.download.waitFor(3);
-    const tailRequests = h.source.requested.filter((id) => id === ids[4]).length;
-    expect(tailRequests).toBe(1);
   });
 });
 

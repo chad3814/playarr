@@ -10,11 +10,18 @@ afterEach(async () => {
 
 /**
  * The job's callbacks run from inside the same `try` that catches article
- * failures, so an unguarded throw is not merely lost — it is recovered from as
- * though the provider had failed, which re-requests an article already on disk
- * and then marks a good segment dead.
+ * failures, so an unguarded throw is not merely lost: it skips the `notify`
+ * that follows it, parking readers forever on bytes already written, and on
+ * two of the paths it escapes and kills the fetcher.
  */
 describe('Download observer failures', () => {
+  /**
+   * Pins a property rather than the guard. This passes with or without
+   * `JobObservers`, because what stops a written segment being re-requested
+   * and marked dead is `#run`'s `nextHoleExcluding` normalisation — the
+   * segment is already covered when recovery re-anchors at it. Kept so that
+   * removing the normalisation is caught here.
+   */
   it('does not blame the article when onCoverage throws', async () => {
     const h = (openHarness = await harness());
     const ids = messageIds(h);
