@@ -1,6 +1,6 @@
 import { parseNzb } from '@chad3814/nzb-parser';
 import { useCallback, useState, type JSX } from 'react';
-import type { JobDto } from '@playarr/shared';
+import type { CandidateFile, JobDto } from '@playarr/shared';
 import { Dropzone } from '../components/Dropzone.tsx';
 import { FileList, type LocalCandidate } from '../components/FileList.tsx';
 
@@ -8,6 +8,7 @@ interface Props {
   readonly jobs: readonly JobDto[];
   readonly uploadNzb: (file: File) => Promise<JobDto>;
   readonly onPlay: (jobId: string, fileIndex: number) => void;
+  readonly onDelete: (jobId: string) => void;
   readonly onRefresh: () => void;
 }
 
@@ -139,35 +140,66 @@ function useLibrary(
   return { entries, unresolved, error, busy, accept, play };
 }
 
-interface JobButtonProps {
+/** Maps the server's candidate shape onto the same one the local NZB parse produces. */
+function toLocalCandidates(candidates: readonly CandidateFile[]): LocalCandidate[] {
+  return candidates.map((candidate) => ({
+    fileIndex: candidate.fileIndex,
+    name: candidate.subjectName,
+    encodedBytes: candidate.encodedBytes,
+    segmentCount: candidate.segmentCount,
+    selectable: candidate.selectable,
+  }));
+}
+
+interface JobRowProps {
   readonly job: JobDto;
   readonly onPlay: Props['onPlay'];
+  readonly onDelete: Props['onDelete'];
 }
 
 /**
- * A job with no selection has nothing to play, and file 0 is not a guess worth
- * making: it is whichever file happened to come first in the NZB, and choosing
- * it is a destructive act on the server — the output file is opened `w+` and
- * the persisted coverage reset. The only way to choose a file is to drop the
- * NZB again and pick one from the list, so the button is offered dead.
+ * A job with a selection plays by resuming it. A job with no selection yet has
+ * nothing to guess at safely -- file 0 is whichever file happened to come
+ * first in the NZB, and choosing it is a destructive act on the server, the
+ * output file opened `w+` and the persisted coverage reset -- so its own
+ * candidate list (already on the wire in `JobDto.candidates`) is offered
+ * instead, the same list a freshly dropped NZB would show. Either way the job
+ * can be deleted, which is the only way out for one that will never resolve to
+ * a usable file.
  */
-function JobButton({ job, onPlay }: JobButtonProps): JSX.Element {
+function JobRow({ job, onPlay, onDelete }: JobRowProps): JSX.Element {
   const selection = job.selection;
-  if (selection === undefined) {
-    return (
-      <button type="button" disabled>
-        {job.nzbName}
-      </button>
-    );
-  }
   return (
-    <button type="button" onClick={() => onPlay(job.id, selection.fileIndex)}>
-      {selection.name}
-    </button>
+    <li className="job-row">
+      <div className="job-row__header">
+        {selection === undefined ? (
+          <span>{job.nzbName}</span>
+        ) : (
+          <button type="button" onClick={() => onPlay(job.id, selection.fileIndex)}>
+            {selection.name}
+          </button>
+        )}
+        <span>{job.status}</span>
+        <button type="button" onClick={() => onDelete(job.id)}>
+          Delete
+        </button>
+      </div>
+      {selection === undefined && (
+        <FileList
+          entries={toLocalCandidates(job.candidates)}
+          onSelect={(fileIndex) => onPlay(job.id, fileIndex)}
+          busy={false}
+        />
+      )}
+    </li>
   );
 }
 
-function JobList({ jobs, onPlay }: Pick<Props, 'jobs' | 'onPlay'>): JSX.Element | null {
+function JobList({
+  jobs,
+  onPlay,
+  onDelete,
+}: Pick<Props, 'jobs' | 'onPlay' | 'onDelete'>): JSX.Element | null {
   if (jobs.length === 0) {
     return null;
   }
@@ -176,17 +208,14 @@ function JobList({ jobs, onPlay }: Pick<Props, 'jobs' | 'onPlay'>): JSX.Element 
       <h2>Jobs</h2>
       <ul className="job-list">
         {jobs.map((job) => (
-          <li key={job.id}>
-            <JobButton job={job} onPlay={onPlay} />
-            <span>{job.status}</span>
-          </li>
+          <JobRow key={job.id} job={job} onPlay={onPlay} onDelete={onDelete} />
         ))}
       </ul>
     </>
   );
 }
 
-export function Library({ jobs, uploadNzb, onPlay, onRefresh }: Props): JSX.Element {
+export function Library({ jobs, uploadNzb, onPlay, onDelete, onRefresh }: Props): JSX.Element {
   const { entries, unresolved, error, busy, accept, play } = useLibrary(
     uploadNzb,
     onPlay,
@@ -214,7 +243,7 @@ export function Library({ jobs, uploadNzb, onPlay, onRefresh }: Props): JSX.Elem
         <FileList entries={entries} onSelect={(index) => void play(index)} busy={busy} />
       )}
 
-      <JobList jobs={jobs} onPlay={onPlay} />
+      <JobList jobs={jobs} onPlay={onPlay} onDelete={onDelete} />
     </section>
   );
 }

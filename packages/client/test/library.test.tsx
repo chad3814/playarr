@@ -29,6 +29,27 @@ const JOB: JobDto = {
   namesUnresolved: false,
 };
 
+/** A job the server already knows the candidates for, but no file chosen yet. */
+const JOB_WITH_CANDIDATES: JobDto = {
+  ...JOB,
+  candidates: [
+    {
+      fileIndex: 0,
+      subjectName: 'Some.Film.mp4',
+      encodedBytes: 1_000,
+      segmentCount: 2,
+      selectable: true,
+    },
+    {
+      fileIndex: 1,
+      subjectName: 'Some.Film.nfo',
+      encodedBytes: 100,
+      segmentCount: 1,
+      selectable: false,
+    },
+  ],
+};
+
 function nzbFile(contents = NZB): File {
   return new File([contents], 'release.nzb', { type: 'application/x-nzb' });
 }
@@ -47,12 +68,22 @@ interface RenderOverrides {
 
 function renderLibrary(overrides: RenderOverrides = {}): {
   readonly onPlay: ReturnType<typeof vi.fn>;
+  readonly onDelete: ReturnType<typeof vi.fn>;
 } {
   const onPlay = vi.fn();
+  const onDelete = vi.fn();
   const uploadNzb = overrides.uploadNzb ?? vi.fn(neverResolves);
   const jobs = overrides.jobs ?? [];
-  render(<Library uploadNzb={uploadNzb} onPlay={onPlay} jobs={jobs} onRefresh={vi.fn()} />);
-  return { onPlay };
+  render(
+    <Library
+      uploadNzb={uploadNzb}
+      onPlay={onPlay}
+      onDelete={onDelete}
+      jobs={jobs}
+      onRefresh={vi.fn()}
+    />,
+  );
+  return { onPlay, onDelete };
 }
 
 afterEach(() => {
@@ -126,17 +157,6 @@ describe('after parsing', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it('offers no way to play a job that has no file chosen yet', async () => {
-    const { onPlay } = renderLibrary({ jobs: [JOB] });
-
-    const button = screen.getByRole('button', { name: 'release.nzb' });
-    expect(button.hasAttribute('disabled')).toBe(true);
-    // File 0 is whichever file came first in the NZB, and choosing it on the
-    // server truncates the output file. Guessing is worse than doing nothing.
-    await userEvent.click(button);
-    expect(onPlay).not.toHaveBeenCalled();
-  });
-
   it('plays the selected file once the upload has produced a job', async () => {
     const upload = vi.fn(() => Promise.resolve(JOB));
     const { onPlay } = renderLibrary({ uploadNzb: upload });
@@ -146,5 +166,27 @@ describe('after parsing', () => {
 
     await userEvent.click(screen.getAllByRole('button', { name: /play/iu })[0]!);
     await waitFor(() => expect(onPlay).toHaveBeenCalledWith('job1', 0));
+  });
+});
+
+describe('an existing job in the library', () => {
+  it('offers the job candidates instead of a guess when no file has been chosen', async () => {
+    const { onPlay } = renderLibrary({ jobs: [JOB_WITH_CANDIDATES] });
+
+    await screen.findByText('Some.Film.mp4');
+    const buttons = screen.getAllByRole('button', { name: /play/iu });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1]?.hasAttribute('disabled')).toBe(true);
+
+    // Explicitly chosen, not guessed at index 0 regardless of content.
+    await userEvent.click(buttons[0]!);
+    expect(onPlay).toHaveBeenCalledWith('job1', 0);
+  });
+
+  it('deletes a job straight from the library, including one with no selection', async () => {
+    const { onDelete } = renderLibrary({ jobs: [JOB] });
+
+    await userEvent.click(screen.getByRole('button', { name: /delete/iu }));
+    expect(onDelete).toHaveBeenCalledWith('job1');
   });
 });

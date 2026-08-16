@@ -73,14 +73,29 @@ button:disabled {
   margin: 1.5rem 0;
 }
 
-.file-list li,
-.job-list li {
+.file-list li {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
   gap: 1rem;
   align-items: center;
   padding: 0.6rem 0;
   border-bottom: 1px solid var(--edge);
+}
+
+.job-list li {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.job-row__header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 1rem;
+  align-items: center;
+}
+
+.job-row .file-list {
+  margin: 0.5rem 0 0;
 }
 
 .file-list__item--muted {

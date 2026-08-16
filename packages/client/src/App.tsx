@@ -112,12 +112,29 @@ function usePlaying(
   return { playing, play, exit };
 }
 
+/** Deletes a job straight from the Library, the only way out for one that can never be played. */
+function useDeleteJob(
+  refresh: () => void,
+  setError: (message: string | null) => void,
+): (jobId: string) => void {
+  return useCallback(
+    (jobId: string) => {
+      setError(null);
+      void api.deleteJob(jobId).then(refresh, (deleteError: unknown) => {
+        setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+      });
+    },
+    [refresh, setError],
+  );
+}
+
 export function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { jobs, refresh } = useJobs(setError);
   const { settings, save } = useSettings();
   const { playing, play, exit } = usePlaying(refresh, setError, () => setShowSettings(true));
+  const deleteJob = useDeleteJob(refresh, setError);
 
   return (
     <main>
@@ -135,7 +152,13 @@ export function App(): JSX.Element {
       )}
 
       {playing === null ? (
-        <Library jobs={jobs} uploadNzb={api.uploadNzb} onPlay={play} onRefresh={refresh} />
+        <Library
+          jobs={jobs}
+          uploadNzb={api.uploadNzb}
+          onPlay={play}
+          onDelete={deleteJob}
+          onRefresh={refresh}
+        />
       ) : (
         <Player job={playing} onExit={exit} onDeleted={exit} />
       )}
