@@ -41,8 +41,20 @@ function scratch(): Promise<string> {
 
 function noop(): void {}
 
-beforeEach(() => {
-  vi.mocked(writeFile).mockClear();
+// mockClear() would only wipe call history; a mockImplementationOnce that its
+// own test never consumed would survive into the next test and be spent by the
+// wrong write. mockReset() is what drains that queue.
+//
+// Vitest 4's mockReset() also restores the implementation vi.fn() was
+// constructed with, so the passthrough would come back on its own. It is
+// re-supplied explicitly anyway: the success paths here are worthless without
+// a real writeFile, and that should not rest on a mock-reset nuance that has
+// already changed once across Vitest majors.
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const mocked = vi.mocked(writeFile);
+  mocked.mockReset();
+  mocked.mockImplementation(actual.writeFile);
 });
 
 afterEach(() => {
@@ -200,10 +212,15 @@ describe('JobStateWriter - retries a failed timer-driven write', () => {
     writer.schedule({ ...sample, status: 'paused' });
     // The first attempt fails. If this rejection were left unhandled, the
     // test run itself would fail via Vitest's unhandled-rejection detection.
+    //
+    // writeJobState's failure path unlinks the temp file before rethrowing, so
+    // reaching onError costs a real filesystem round trip, not a fixed number
+    // of microtask hops. Wait on the condition; vi.waitFor polls on the real
+    // clock, which is what lets that unlink actually complete.
     await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(onError).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
     expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
 
     // The debounce re-armed itself; the retry lands on its own.
@@ -234,8 +251,11 @@ describe('JobStateWriter - supersession of a failed retry', () => {
     // #pending is back to null. Schedule a newer state while it hangs.
     writer.schedule({ ...sample, status: 'complete' });
     rejectWrite(new Error('EACCES'));
-    await Promise.resolve();
-    await Promise.resolve();
+    // Same real-filesystem round trip as above, so wait for the report rather
+    // than for a tick count.
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
 
     await vi.advanceTimersByTimeAsync(1_000);
     await writer.flush();

@@ -223,11 +223,15 @@ describe('JobStore.update - onWriteError', () => {
     vi.mocked(writeFile).mockImplementationOnce(() => Promise.reject(new Error('ENOSPC')));
     await store.update('job1', { ...record.state, status: 'paused' });
 
+    // writeJobState's failure path unlinks the temp file before rethrowing, so
+    // reaching onWriteError costs a real filesystem round trip rather than a
+    // fixed number of microtask hops. vi.waitFor polls on the real clock,
+    // which is what lets that unlink complete.
     await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(onWriteError).toHaveBeenCalledTimes(1);
+    });
 
-    expect(onWriteError).toHaveBeenCalledTimes(1);
     expect(onWriteError.mock.calls[0]?.[0]).toBe('job1');
     expect(onWriteError.mock.calls[0]?.[1]).toBeInstanceOf(Error);
 
