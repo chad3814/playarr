@@ -1,8 +1,33 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JobDto } from '@playarr/shared';
-import { closeFixture, fixture, selectRequest, SEG, type Fixture } from './app-fixture.ts';
+import {
+  closeFixture,
+  fixture,
+  multipart,
+  nzbFor,
+  selectRequest,
+  SEG,
+  type Fixture,
+} from './app-fixture.ts';
 
 let current: Fixture | null = null;
+
+/**
+ * Upload a second job carrying the same post.
+ *
+ * Overlapping selections have to name two different jobs to overlap at all:
+ * re-selecting the file a job already has is a no-op by design, so two
+ * concurrent selects of one job can no longer displace anything.
+ */
+async function anotherJob(f: Fixture): Promise<string> {
+  const subject = '[1/1] - &quot;Some.Film.mp4&quot; yEnc (1/4)';
+  const response = await f.app.inject({
+    method: 'POST',
+    url: '/api/jobs',
+    ...multipart(nzbFor(f.post, subject), 'r2.nzb'),
+  });
+  return response.json<JobDto>().id;
+}
 
 afterEach(async () => {
   await closeFixture(current);
@@ -97,6 +122,7 @@ describe('JobManager single-flight ownership', () => {
   it('stops and closes the download a concurrent selection displaces', async () => {
     current = await fixture();
     const f = current;
+    const second = await anotherJob(f);
     const probe = f.post.file.segments[0]!.messageId;
     const tail = f.post.file.segments[3]!.messageId;
     f.source.hold(probe);
@@ -110,7 +136,7 @@ describe('JobManager single-flight ownership', () => {
 
     // B starts while A is mid-probe. Ungated it walks into its own #open and
     // races A to `#active`; gated it waits for A to finish.
-    const b = f.app.inject(selectRequest(f.jobId, 0));
+    const b = f.app.inject(selectRequest(second, 0));
     // One whole event-loop turn, then a negative assertion: A is still parked
     // on the held probe and has not reached #begin, so the two calls really do
     // overlap rather than running back to back.
@@ -131,7 +157,7 @@ describe('JobManager single-flight ownership', () => {
     expect((await a).statusCode).toBe(200);
     expect((await b).statusCode).toBe(200);
 
-    expect(f.manager.activeId).toBe(f.jobId);
+    expect(f.manager.activeId).toBe(second);
     expect(f.manager.active()).not.toBe(displaced);
     // The descriptor A opened was closed, so nothing is writing behind B.
     await expect(displaced.fd.read(Buffer.alloc(1), 0, 1, 0)).rejects.toThrow(/file closed|EBADF/u);

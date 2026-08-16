@@ -42,6 +42,7 @@ function neverResolves(): Promise<never> {
 
 interface RenderOverrides {
   readonly uploadNzb?: (file: File) => Promise<JobDto>;
+  readonly jobs?: readonly JobDto[];
 }
 
 function renderLibrary(overrides: RenderOverrides = {}): {
@@ -49,7 +50,8 @@ function renderLibrary(overrides: RenderOverrides = {}): {
 } {
   const onPlay = vi.fn();
   const uploadNzb = overrides.uploadNzb ?? vi.fn(neverResolves);
-  render(<Library uploadNzb={uploadNzb} onPlay={onPlay} jobs={[]} onRefresh={vi.fn()} />);
+  const jobs = overrides.jobs ?? [];
+  render(<Library uploadNzb={uploadNzb} onPlay={onPlay} jobs={jobs} onRefresh={vi.fn()} />);
   return { onPlay };
 }
 
@@ -108,6 +110,17 @@ describe('after parsing', () => {
 
     expect(await screen.findByRole('alert')).toBeDefined();
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('offers no way to play a job that has no file chosen yet', async () => {
+    const { onPlay } = renderLibrary({ jobs: [JOB] });
+
+    const button = screen.getByRole('button', { name: 'release.nzb' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    // File 0 is whichever file came first in the NZB, and choosing it on the
+    // server truncates the output file. Guessing is worse than doing nothing.
+    await userEvent.click(button);
+    expect(onPlay).not.toHaveBeenCalled();
   });
 
   it('plays the selected file once the upload has produced a job', async () => {

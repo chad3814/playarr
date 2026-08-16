@@ -135,6 +135,34 @@ function useLibrary(
   return { entries, unresolved, error, busy, accept, play };
 }
 
+/**
+ * A job with no selection has nothing to play, and file 0 is not a guess worth
+ * making: it is whichever file happened to come first in the NZB, and choosing
+ * it is a destructive act on the server — the output file is opened `w+` and
+ * the persisted coverage reset. The only way to choose a file is to drop the
+ * NZB again and pick one from the list, so the button is offered dead.
+ */
+interface JobButtonProps {
+  readonly job: JobDto;
+  readonly onPlay: Props['onPlay'];
+}
+
+function JobButton({ job, onPlay }: JobButtonProps): JSX.Element {
+  const selection = job.selection;
+  if (selection === undefined) {
+    return (
+      <button type="button" disabled>
+        {job.nzbName}
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={() => onPlay(job.id, selection.fileIndex)}>
+      {selection.name}
+    </button>
+  );
+}
+
 function JobList({ jobs, onPlay }: Pick<Props, 'jobs' | 'onPlay'>): JSX.Element | null {
   if (jobs.length === 0) {
     return null;
@@ -145,9 +173,7 @@ function JobList({ jobs, onPlay }: Pick<Props, 'jobs' | 'onPlay'>): JSX.Element 
       <ul className="job-list">
         {jobs.map((job) => (
           <li key={job.id}>
-            <button type="button" onClick={() => onPlay(job.id, job.selection?.fileIndex ?? 0)}>
-              {job.selection?.name ?? job.nzbName}
-            </button>
+            <JobButton job={job} onPlay={onPlay} />
             <span>{job.status}</span>
           </li>
         ))}

@@ -83,7 +83,7 @@ export class JobManager {
     return id === null ? null : (this.#store.get(id) ?? null);
   }
 
-  /** Probe the chosen file, size the sparse file, and prime head and tail. */
+  /** Probe the file, size the sparse file, prime head and tail. See `#select`. */
   select(id: string, fileIndex: number): Promise<JobRecord> {
     return this.#serialize(() => this.#select(id, fileIndex));
   }
@@ -130,6 +130,15 @@ export class JobManager {
     const file = record.nzb.files[fileIndex];
     if (file === undefined) {
       throw new HttpError(400, 'bad-file-index', `No file ${fileIndex} in this NZB.`);
+    }
+
+    // Choosing what is already chosen must change nothing, so it must destroy
+    // nothing: `#install` below opens the output `w+` and persists an empty
+    // `covered`, which for a watched job truncates the file and forgets which
+    // of its bytes were real. Resuming is what such a request means, and GET
+    // /stream's `activate()` is what does it. A `failed` job starts over.
+    if (record.state.selection?.fileIndex === fileIndex && record.state.status !== 'failed') {
+      return record;
     }
 
     await this.#releaseAll();

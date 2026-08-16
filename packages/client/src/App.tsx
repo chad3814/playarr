@@ -54,6 +54,31 @@ interface PlayingState {
 }
 
 /**
+ * Open a job for playback without destroying what is already on disk.
+ *
+ * `selectFile` is a *selection*, not a resume: the server opens the output
+ * file `w+` and persists a selection whose `covered` and `dead` are empty. Ask
+ * it for the file a job has already been watching and forty minutes of sparse
+ * file is truncated and the record of which bytes were real is gone — and the
+ * same is true of every job a container restart brought back `paused` with its
+ * coverage intact.
+ *
+ * A job that already has this file chosen therefore only needs fetching. The
+ * `<video>` element's first range request against `GET /stream` calls
+ * `JobManager.activate`, which resumes from the persisted coverage; that is
+ * the designed resume path and this is the client half of it. A `failed` job
+ * is still re-selected, because starting over is the only way out of a
+ * failure.
+ */
+async function openForPlayback(jobId: string, fileIndex: number): Promise<JobDto> {
+  const job = await api.getJob(jobId);
+  if (job.selection?.fileIndex === fileIndex && job.status !== 'failed') {
+    return job;
+  }
+  return api.selectFile(jobId, fileIndex);
+}
+
+/**
  * Owns which job is playing. A `not-configured` failure from the server
  * means there is no provider yet, so it hands off to the settings dialog
  * instead of surfacing a raw error.
@@ -68,12 +93,12 @@ function usePlaying(
   const play = useCallback(
     (jobId: string, fileIndex: number) => {
       setError(null);
-      void api.selectFile(jobId, fileIndex).then(setPlaying, (selectError: unknown) => {
-        if (selectError instanceof api.ApiRequestError && selectError.code === 'not-configured') {
+      void openForPlayback(jobId, fileIndex).then(setPlaying, (playError: unknown) => {
+        if (playError instanceof api.ApiRequestError && playError.code === 'not-configured') {
           onNotConfigured();
           return;
         }
-        setError(selectError instanceof Error ? selectError.message : String(selectError));
+        setError(playError instanceof Error ? playError.message : String(playError));
       });
     },
     [setError, onNotConfigured],

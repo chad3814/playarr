@@ -1,6 +1,6 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JobDto } from '@playarr/shared';
 import { JobStore } from '../src/jobs/store.ts';
 import {
@@ -153,6 +153,39 @@ describe('POST /api/jobs/:id/select - persistence', () => {
       [3, 4],
     ]);
     await reopened.dispose();
+  });
+});
+
+describe('POST /api/jobs/:id/select - re-selecting the file already chosen', () => {
+  // The UI reaches the Player through this route, so a user coming back to a
+  // job they have already watched sends exactly this request. Selecting is a
+  // destructive act -- `w+` on the output file, `covered: []` in state.json --
+  // and it must not be what "open this again" does.
+  it('leaves the file and its coverage alone instead of starting over', async () => {
+    current = await fixture();
+    const f = current;
+    await f.app.inject(selectRequest(f.jobId, 0));
+
+    // Fill the hole prime() left, so the persisted coverage is something a
+    // fresh selection could not reproduce: prime alone gives [[0,1],[3,4]].
+    const download = f.manager.active()!;
+    download.want(1);
+    await download.waitFor(2);
+    await vi.waitFor(() => {
+      expect(f.store.get(f.jobId)?.state.selection?.covered).toEqual([[0, 4]]);
+    });
+    await f.manager.releaseAll();
+    const dir = f.store.get(f.jobId)!.dir;
+
+    const response = await f.app.inject(selectRequest(f.jobId, 0));
+
+    expect(response.statusCode).toBe(200);
+    expect(f.store.get(f.jobId)?.state.selection?.covered).toEqual([[0, 4]]);
+    // ...and every byte is still there, rather than zeroed by a fresh `w+`.
+    expect((await readFile(join(dir, 'Some.Film.mp4'))).equals(f.post.data)).toBe(true);
+    // Nothing was re-installed, so no connection was spent proving it either.
+    expect(f.manager.activeId).toBeNull();
+    expect(f.onError).not.toHaveBeenCalled();
   });
 });
 
