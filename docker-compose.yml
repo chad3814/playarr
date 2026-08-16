@@ -1,0 +1,26 @@
+services:
+  playarr:
+    build: .
+    ports:
+      - '8080:8080'
+    volumes:
+      - playarr-data:/data
+    environment:
+      # Configure here to keep credentials off the volume entirely. Leave these
+      # unset to use the settings page instead, which writes a plaintext
+      # password to /data/config.json at 0600.
+      #
+      # An unset host variable is interpolated by compose as the empty
+      # string, not as "absent" — readEnv/resolveSettings in the server
+      # treat '' the same as unset for every one of these fields, so this is
+      # safe whether or not the host has them set.
+      NNTP_HOST: ${NNTP_HOST:-}
+      NNTP_PORT: ${NNTP_PORT:-563}
+      NNTP_SECURITY: ${NNTP_SECURITY:-implicit}
+      NNTP_CONNECTIONS: ${NNTP_CONNECTIONS:-8}
+      NNTP_USERNAME: ${NNTP_USERNAME:-}
+      NNTP_PASSWORD: ${NNTP_PASSWORD:-}
+    restart: unless-stopped
+
+volumes:
+  playarr-data:
