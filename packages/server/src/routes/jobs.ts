@@ -1,3 +1,4 @@
+import { NzbParseError } from '@chad3814/nzb-parser';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { AppDeps } from '../app.ts';
 import { toJobDto } from '../app.ts';
@@ -19,10 +20,16 @@ export const registerJobRoutes: FastifyPluginAsync<{ deps: AppDeps }> = (
       const record = await store.create(upload.filename, bytes);
       return reply.code(201).send(toJobDto(record, manager.activeId));
     } catch (error) {
-      // The parser is strict on purpose and its messages name the problem.
+      if (error instanceof NzbParseError) {
+        // The parser is strict on purpose and its messages name the problem.
+        return reply.code(400).send({ code: 'bad-nzb', message: error.message });
+      }
+      // Anything past the parse is a server-side failure (disk full,
+      // permissions, ...): Node's fs errors embed absolute paths, so none of
+      // that detail belongs in a public response body.
       return reply
-        .code(400)
-        .send({ code: 'bad-nzb', message: error instanceof Error ? error.message : String(error) });
+        .code(500)
+        .send({ code: 'upload-failed', message: 'The upload could not be saved.' });
     }
   });
 

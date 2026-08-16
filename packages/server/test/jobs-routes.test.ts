@@ -6,9 +6,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { JobDto } from '@playarr/shared';
 import { buildApp } from '../src/app.ts';
 import { ConfigStore } from '../src/config/store.ts';
-import { JobStore } from '../src/jobs/store.ts';
+import { JobStore, type JobRecord } from '../src/jobs/store.ts';
 import { JobManager } from '../src/jobs/manager.ts';
 import { PoolManager } from '../src/nntp/pool.ts';
+
+/**
+ * A store whose `create` fails after the parse would have succeeded, the way
+ * a real disk-full or permissions error does. Used to prove the route tells
+ * such a failure apart from a bad upload instead of reporting both as a 400.
+ */
+class FailingStore extends JobStore {
+  override create(_nzbName: string, _bytes: Buffer): Promise<JobRecord> {
+    return Promise.reject(new Error("EACCES: permission denied, mkdir '/data/jobs/deadbeef'"));
+  }
+}
 
 const NZB = `<?xml version="1.0" encoding="iso-8859-1" ?>
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
@@ -23,9 +34,7 @@ const NZB = `<?xml version="1.0" encoding="iso-8859-1" ?>
 
 let app: FastifyInstance | null = null;
 
-async function makeApp(): Promise<FastifyInstance> {
-  const root = await mkdtemp(join(tmpdir(), 'playarr-routes-'));
-  const store = new JobStore(join(root, 'jobs'));
+async function makeAppWithStore(root: string, store: JobStore): Promise<FastifyInstance> {
   await store.scan();
   const pool = new PoolManager(() => {
     throw new Error('no pool in this test');
@@ -39,6 +48,11 @@ async function makeApp(): Promise<FastifyInstance> {
   });
   app = built;
   return built;
+}
+
+async function makeApp(): Promise<FastifyInstance> {
+  const root = await mkdtemp(join(tmpdir(), 'playarr-routes-'));
+  return makeAppWithStore(root, new JobStore(join(root, 'jobs')));
 }
 
 /** Fastify's inject accepts a payload + headers; multipart needs a real body. */
@@ -98,6 +112,23 @@ describe('POST /api/jobs', () => {
       payload: '------x--\r\n',
     });
     expect(response.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/jobs when the store fails to persist', () => {
+  it('reports a server-side failure without leaking a filesystem path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'playarr-routes-'));
+    const server = await makeAppWithStore(root, new FailingStore(join(root, 'jobs')));
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      ...multipart(NZB, 'release.nzb'),
+    });
+
+    expect(response.statusCode).not.toBe(400);
+    expect(response.json<{ code: string }>().code).not.toBe('bad-nzb');
+    expect(response.body).not.toContain('/data/jobs');
+    expect(response.body).not.toContain('EACCES');
   });
 });
 
