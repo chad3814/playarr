@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX, type RefObject } from 'react';
-import type { JobDto, JobStatus, ProgressEvent, SegmentRun } from '@playarr/shared';
+import type { JobDto, JobStatus, ProgressEvent, SegmentRun, SettingsDto } from '@playarr/shared';
 import * as defaultApi from '../api.ts';
 import { isProgressEvent } from '../api.ts';
 import { CoverageBar } from '../components/CoverageBar.tsx';
@@ -9,9 +9,12 @@ interface Props {
   readonly job: JobDto;
   readonly onExit: () => void;
   readonly onDeleted: () => void;
+  /** No provider is configured on the server; hands off to the settings dialog. */
+  readonly onNotConfigured?: () => void;
   /** Injected in tests. */
   readonly completeJob?: (id: string) => Promise<JobDto>;
   readonly deleteJob?: (id: string) => Promise<void>;
+  readonly getSettings?: () => Promise<SettingsDto | null>;
 }
 
 function mibPerSecond(bytesPerSecond: number): string {
@@ -41,6 +44,64 @@ function useEnded(video: RefObject<HTMLVideoElement | null>): {
 
   const dismiss = useCallback(() => setFinished(false), []);
   return { finished, dismiss };
+}
+
+/**
+ * Surfaces a `<video>` element's `error` event, which nothing previously
+ * listened for -- a dead frame with no message. A native listener, not
+ * React's `onError` prop, for the same reason `useEnded` uses one: media
+ * events do not bubble.
+ *
+ * A `MediaError` carries no HTTP status, so it cannot say *why* the stream
+ * failed. `GET /settings` can: a `null` result means the server has no
+ * provider configured, which is exactly the condition `openForPlayback`
+ * cannot detect on a resumed job, so it gets the same settings-dialog
+ * handoff the initial-selection path already has. Any other settings state
+ * means the stream broke for some other reason, which deserves a message
+ * rather than a guess at what that reason was.
+ */
+function useStreamError(
+  video: RefObject<HTMLVideoElement | null>,
+  onNotConfigured: () => void,
+  getSettings: () => Promise<SettingsDto | null>,
+): string | null {
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const element = video.current;
+    if (element === null) {
+      return;
+    }
+    const onError = (): void => {
+      void getSettings().then((settings) => {
+        if (settings === null) {
+          onNotConfigured();
+          return;
+        }
+        setMessage('The stream failed. The file may be corrupt or no longer available.');
+      });
+    };
+    element.addEventListener('error', onError);
+    return () => element.removeEventListener('error', onError);
+  }, [video, onNotConfigured, getSettings]);
+
+  return message;
+}
+
+interface StreamErrorProps {
+  readonly message: string | null;
+}
+
+/** Renders `useStreamError`'s message, or nothing while the stream is healthy. */
+function StreamError({ message }: StreamErrorProps): JSX.Element | null {
+  if (message === null) {
+    return null;
+  }
+  return (
+    <p role="alert" className="error">
+      {message}
+    </p>
+  );
 }
 
 interface JobActions {
@@ -176,11 +237,14 @@ export function Player({
   job,
   onExit,
   onDeleted,
+  onNotConfigured = () => {},
   completeJob = defaultApi.completeJob,
   deleteJob = defaultApi.deleteJob,
+  getSettings = defaultApi.getSettings,
 }: Props): JSX.Element {
   const video = useRef<HTMLVideoElement>(null);
   const { finished, dismiss } = useEnded(video);
+  const streamError = useStreamError(video, onNotConfigured, getSettings);
   const { working, error, download, remove } = useJobActions(
     job.id,
     onDeleted,
@@ -199,6 +263,8 @@ export function Player({
       </header>
 
       <video ref={video} data-testid="video" controls src={`/api/jobs/${job.id}/stream`} />
+
+      <StreamError message={streamError} />
 
       <CoverageBar covered={covered} dead={dead} segmentCount={segmentCount} />
 

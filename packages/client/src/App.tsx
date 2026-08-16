@@ -128,12 +128,47 @@ function useDeleteJob(
   );
 }
 
+interface PlayingAreaProps {
+  readonly jobs: readonly JobDto[];
+  readonly playing: JobDto | null;
+  readonly play: (jobId: string, fileIndex: number) => void;
+  readonly deleteJob: (jobId: string) => void;
+  readonly refresh: () => void;
+  readonly exit: () => void;
+  readonly onNotConfigured: () => void;
+}
+
+/** The Library when nothing is playing, otherwise the Player for the job that is. */
+function PlayingArea({
+  jobs,
+  playing,
+  play,
+  deleteJob,
+  refresh,
+  exit,
+  onNotConfigured,
+}: PlayingAreaProps): JSX.Element {
+  if (playing === null) {
+    return (
+      <Library
+        jobs={jobs}
+        uploadNzb={api.uploadNzb}
+        onPlay={play}
+        onDelete={deleteJob}
+        onRefresh={refresh}
+      />
+    );
+  }
+  return <Player job={playing} onExit={exit} onDeleted={exit} onNotConfigured={onNotConfigured} />;
+}
+
 export function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { jobs, refresh } = useJobs(setError);
   const { settings, save } = useSettings();
-  const { playing, play, exit } = usePlaying(refresh, setError, () => setShowSettings(true));
+  const onNotConfigured = useCallback(() => setShowSettings(true), []);
+  const { playing, play, exit } = usePlaying(refresh, setError, onNotConfigured);
   const deleteJob = useDeleteJob(refresh, setError);
 
   return (
@@ -151,17 +186,15 @@ export function App(): JSX.Element {
         </p>
       )}
 
-      {playing === null ? (
-        <Library
-          jobs={jobs}
-          uploadNzb={api.uploadNzb}
-          onPlay={play}
-          onDelete={deleteJob}
-          onRefresh={refresh}
-        />
-      ) : (
-        <Player job={playing} onExit={exit} onDeleted={exit} />
-      )}
+      <PlayingArea
+        jobs={jobs}
+        playing={playing}
+        play={play}
+        deleteJob={deleteJob}
+        refresh={refresh}
+        exit={exit}
+        onNotConfigured={onNotConfigured}
+      />
 
       {showSettings && (
         <SettingsDialog
