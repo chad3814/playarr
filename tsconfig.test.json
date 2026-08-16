@@ -4,11 +4,7 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "noEmit": true,
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "jsx": "react-jsx",
-    "module": "preserve",
-    "moduleResolution": "bundler"
+    "noEmit": true
   },
-  "include": ["vitest.config.ts", "packages/*/test/**/*.ts", "packages/*/test/**/*.tsx"]
+  "include": ["vitest.config.ts", "packages/server/test/**/*.ts", "packages/shared/test/**/*.ts"]
 }
