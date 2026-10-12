@@ -4,8 +4,8 @@ import type { Provider } from '@chad3814/secret-provider';
 import type { NntpSecret } from '@chad3814/nntp';
 import type { NntpSecurity, SettingsDto, SettingsUpdate } from '@playarr/shared';
 
-export const SECRET_PASSWORD_PATH = '/run/secret/nntp_password';
-export const SECRET_USERNAME_PATH = '/run/secret/nntp_username';
+export const SECRET_PASSWORD_PATH = '/run/secrets/nntp_password';
+export const SECRET_USERNAME_PATH = '/run/secrets/nntp_username';
 
 const DEFAULT_PORT = 563;
 const DEFAULT_CONNECTIONS = 4;
